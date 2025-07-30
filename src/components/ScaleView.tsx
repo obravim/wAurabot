@@ -82,15 +82,20 @@ function ScaleView() {
     };
 
     const handleApply = async () => {
+        
         if (!result || pixelDist == 0) {
             alert("Draw a line over a known-length object to manually scale.")
             return;
         }
 
+        const {feet,inch} = result;
+        const totalInch = feet*12 + inch;
+        const scaleFactor = totalInch/pixelDist
+
         fetch('/api/detect', {
             method: 'POST',
             body: JSON.stringify({
-                pixelDist, result
+                scaleFactor
             }),
         }).then(res => res.json()).then(data => {
             const resp = data.response;
@@ -104,8 +109,8 @@ function ScaleView() {
         if (!feetRef.current || !inchRef.current) {
             return;
         }
-        const feet = parseInt(feetRef.current.value);
-        const inch = parseInt(inchRef.current.value);
+        const feet = parseInt(feetRef.current.value.trim() == "" ? '0' : feetRef.current.value.trim());
+        const inch = parseFloat(inchRef.current.value.trim() == "" ? '0' : inchRef.current.value.trim());
 
         if (feet == 0 && inch == 0) {
             return;
@@ -166,7 +171,7 @@ function ScaleView() {
                 </div>
                 {/* canvas section */}
                 <div className='w-[800px] rounded-2xl h-[800px]  mt-6 overflow-hidden flex items-center justify-center bg-[#6b6775]'>
-                    <Canvas image={image} ref={canvasRef} move={move} setInputModelOpen={setinputModelOpen} setPixelDist={setpixelDist} stageSize={{ width: 800, height: 800 }} drawRect='none' />
+                    <Canvas image={image} ref={canvasRef} move={move} setInputModelOpen={setinputModelOpen} setPixelDist={setpixelDist} stageSize={{ width: 800, height: 800 }} drawRect='none' rects={[]} setRects={()=>{}}/>
                 </div>
                 <p className='text-center font-figtree'>
                     Once you&#39;ve defined a known-length reference, click <span className='text-[#873EFD]'>Apply Scale</span> to begin detection.

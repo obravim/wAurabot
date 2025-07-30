@@ -3,10 +3,10 @@
 import { Stage, Layer, Text, Rect, Line, Label, Tag, Image as KonvaImage, Circle } from 'react-konva';
 import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import Konva from 'konva';
+import { RectType } from './EditView';
 import { useStep } from '@/app/context/StepContext';
 import { useCanvas } from '@/app/context/CanvasContext';
-import { useZone, ZoneType } from '@/app/context/ZoneContext';
-import { randomUUID } from 'crypto';
+import { useZone, Zone, ZoneData } from '@/app/context/ZoneContext';
 
 export type CanvasHandle = {
     zoomStage: (direction: "in" | "out", scaleFactor: number) => void;
@@ -21,23 +21,13 @@ type CanvasProps = {
     setInputModelOpen: ((inputModelOpen: boolean) => void) | null,
     setPixelDist: ((pixelDist: number) => void) | null,
     stageSize: { width: number, height: number },
+    rects: RectType[]
+    setRects: React.Dispatch<React.SetStateAction<RectType[]>>
 };
 
 type Point = [number, number]
 
-type RectType = {
-    id: string;
-    type: 'room' | 'door' | 'window';
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    stroke: string;
-    selected: boolean,
-    zone: number | null
-};
-
-type RoomCoord = {
+export type RoomCoord = {
     startPoint: Point;
     endPoint: Point;
     color: string;
@@ -54,19 +44,28 @@ type ImgDrawDetails = {
     startY: number
 }
 
-function getRectFromCoords(roomCoords: RoomCoord, id: string, type: 'room' | 'door' | 'window') {
+function getWordSize(text: string, fontSize: number) {
+    return text.length * (fontSize);
+}
+
+function getRectFromCoords(roomCoords: RoomCoord, id: string, display: string, type: 'room' | 'door' | 'window', scaleFactor: number) {
     const [x1, y1] = roomCoords.startPoint;
     const [x2, y2] = roomCoords.endPoint;
     const x = Math.min(x1, x2);
     const y = Math.min(y1, y2);
     const width = Math.abs(x2 - x1);
     const height = Math.abs(y2 - y1);
+    let width_ft = Math.abs(x2 - x1) * scaleFactor / 12;
+    let height_ft = 0;
+    if (type == 'room') {
+        height_ft = Math.abs(y2 - y1) * scaleFactor / 12;
+    }
     return {
-        id, x, y, width, type, stroke: roomCoords.color, height, selected: false, zone: null
+        id, name: display, x, y, width, type, stroke: roomCoords.color, height, selected: false, zone: null, width_ft, height_ft
     }
 }
 
-const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputModelOpen, setPixelDist, stageSize, drawRect }, ref) => {
+const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputModelOpen, setPixelDist, stageSize, drawRect, rects, setRects }, ref) => {
     const { step } = useStep();
     const [imgDrawDetails, setImgDrawDetails] = useState<ImgDrawDetails>();
     const stageRef = useRef<Konva.Stage>(null);
@@ -77,28 +76,29 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const [line, setLine] = useState<Line | null>();
     const [newLine, setNewLine] = useState<Point | null>(null);
     const [hoverPos, setHoverPos] = useState<[number, number] | null>(null);
-    const isDrawing = useRef(false);
+    const newLineRef = useRef<number[] | null>(null);
+    const hoverPosRef = useRef<number[] | null>(null);
     const [dimText, setDimText] = useState<string>("");
-    const { roomCoords, doorCoords, windowCoords } = useCanvas();
-    const [rects, setRects] = useState<RectType[]>([]);
+    const isDrawing = useRef(false);
+    const { scaleFactor, roomCoords, doorCoords, windowCoords } = useCanvas();
     const [newRect, setNewRect] = useState<RoomCoord | null>(null);
     const rectsRef = useRef<RectType[]>([]);
-    const { zones, setZones } = useZone();
-    const zonesRef = useRef<ZoneType[]>([]);
+    const { zoneData, setZoneData } = useZone();
+    const zoneDataRef = useRef<ZoneData>({ zones: [], rooms: [] });
+    const [cursor, setCursor] = useState<'grabbing' | 'crosshair' | 'auto'>('auto');
 
     useEffect(() => {
         rectsRef.current = rects;
     }, [rects]);
 
     useEffect(() => {
-        zonesRef.current = zones;
-    }, [zones]);
+        zoneDataRef.current = zoneData;
+    }, [zoneData]);
 
     useEffect(() => {
         if (!(image?.width) || !(image?.height)) {
             return;
         }
-
         const imgDrawWidth = image?.width > image?.height ? stageSize.width : stageSize.width * image?.width / image?.height;
         const imgDrawHeight = image?.height > image?.width ? stageSize.height : image?.height * stageSize.height / image?.width;
         const startX = stageSize.width / 2 - (imgDrawWidth / 2);
@@ -108,22 +108,26 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
         setDimText("");
         setHoverPos(null);
         setNewLine(null);
-    }, [stageSize, image]);
+        newLineRef.current = null;
+        hoverPosRef.current = null;
+    }, [image]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
                 if (step == 1) {
-                    if (newLine) {
+                    if (newLineRef.current) {
                         setNewLine(null);
+                        newLineRef.current = null;
                         setHoverPos(null);
+                        hoverPosRef.current = null;
                     }
                 }
                 if (step == 2) {
                     setNewRect(null);
                     isDrawing.current = false;
-                    setRects((rects) => {
-                        return rects.map((rect) => {
+                    setRects((rects: RectType[]) => {
+                        return rects.map((rect: RectType) => {
                             return { ...rect, selected: false };
                         })
                     })
@@ -132,25 +136,31 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
             if (e.ctrlKey && e.key.toLowerCase() === 'g') {
                 e.preventDefault();
                 if (step != 2) return;
-                const selectedRects = rectsRef.current.filter(rect => {
-                    return rect.selected && rect.zone == null
+                const selectedRooms = rectsRef.current.filter(rect => {
+                    return rect.selected && rect.zone == null && rect.type === 'room'
                 });
-                if (selectedRects.length == 0) {
+                if (selectedRooms.length == 0) {
                     alert("No object selected!");
                     return;
                 };
-                const zones = zonesRef.current
-                const zoneRects = selectedRects.map(rect => {
-
-                    return { expanded: false, id: rect.id, type: rect.type, dimension: { length: null, breadth: null }, area: null, child: null }
+                const selectedRoomIds = selectedRooms.map(room => room.id);
+                const zoneData = zoneDataRef.current
+                const zoneRooms = selectedRooms.map(room => {
+                    return { expanded: false, id: room.id, name: room.name, dimension: { length: null, breadth: null }, area: null, child: null }
                 })
-                const zone: ZoneType = { rects: zoneRects, color: "black", expanded: false };
-                setZones([...zones, zone])
+                const zone: Zone = { id: zoneData.zones.length + 1, rooms: zoneRooms, color: "black", expanded: false };
+                setZoneData(zoneData => {
+                    return {
+                        zones: [...zoneData.zones, zone], rooms: zoneData.rooms.filter(room => {
+                            return !(room.id in selectedRoomIds)
+                        })
+                    }
+                })
                 setRects((rects) => {
                     return rects.map(rect => {
                         if (rect.selected && rect.zone == null) {
-                            rect.stroke = "black"
-                            rect.zone = zones.length;
+                            rect.stroke = zone.color
+                            rect.zone = zone.id;
                         }
                         rect.selected = false;
                         return rect
@@ -164,36 +174,19 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     }, []);
 
     useEffect(() => {
-        const rects: RectType[] = [];
-        if (roomCoords) roomCoords.forEach((room, index) => {
-            const id = randomUUID();
-            rects.push(getRectFromCoords({ startPoint: [room.startPoint[0], room.startPoint[1]], endPoint: [room.endPoint[0], room.endPoint[1]], color: room.color }, id, 'room'));
-        })
-        if (doorCoords) doorCoords.forEach((door, index) => {
-            const id = "door" + index;
-            rects.push(getRectFromCoords({ startPoint: [door.startPoint[0], door.startPoint[1]], endPoint: [door.endPoint[0], door.endPoint[1]], color: door.color }, id, 'door'));
-        })
-        if (windowCoords) windowCoords.forEach((window, index) => {
-            const id = "window" + index;
-            rects.push(getRectFromCoords({ startPoint: [window.startPoint[0], window.startPoint[1]], endPoint: [window.endPoint[0], window.endPoint[1]], color: window.color }, id, 'window'));
-        })
-        const sortedRects = [...rects].sort((a, b) => {
-            // Smaller rectangles on top
-            const aSize = Math.abs(a.width) * Math.abs(a.height);
-            const bSize = Math.abs(b.width) * Math.abs(b.height);
-            return bSize - aSize;
-        });
-        setRects(sortedRects);
-    }, [roomCoords, doorCoords, windowCoords])
-
-    useEffect(() => {
-        if (drawRect == 'none') {
-            document.body.style.cursor = 'auto';
+        if (move) {
+            setCursor('grabbing')
+        }
+        else if (step == 1) {
+            setCursor('crosshair')
+        }
+        else if (drawRect == 'none') {
+            setCursor('auto')
         }
         else {
-            document.body.style.cursor = 'crosshair';
+            setCursor('crosshair')
         }
-    }, [drawRect])
+    }, [move, drawRect])
 
     const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>) => {
         if (newLine) return;
@@ -270,7 +263,6 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 x: clientX,
                 y: clientY,
             };
-            document.body.style.cursor = 'grabbing';
         } // don’t interfere with zoom
         else if (step == 1) {
             if (line) {
@@ -310,7 +302,9 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
 
                 if (setInputModelOpen) setInputModelOpen(true)
                 setNewLine(null);
+                newLineRef.current = null;
                 setHoverPos(null);
+                hoverPosRef.current = null;
             } else {
                 // Start line
 
@@ -322,7 +316,9 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 ) {
                     // Proceed with drawing
                     setNewLine([pointer.x, pointer.y]);
+                    newLineRef.current = [pointer.x, pointer.y]
                     setHoverPos([pointer.x, pointer.y]);
+                    hoverPosRef.current = [pointer.x, pointer.y]
                 }
             }
         } else if (step == 2) {
@@ -384,7 +380,6 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 x: clientX,
                 y: clientY,
             };
-            document.body.style.cursor = 'grabbing';
         }
         else if (step == 1) {
 
@@ -424,10 +419,16 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const handleMouseUp = () => {
         isDragging.current = false;
         lastPos.current = null;
-        // document.body.style.cursor = 'auto';
         if (step == 2) {
             if (drawRect != 'none' && newRect) {
-                setRects((prev) => [...prev, getRectFromCoords(newRect, drawRect + prev.length, drawRect)]);
+                const display = drawRect.charAt(0).toUpperCase + drawRect.substring(1)
+                const tempRect = getRectFromCoords(newRect, drawRect.charAt(0).toUpperCase() + rectsRef.current.length, display, drawRect, scaleFactor);
+                setRects((prev) => [...prev, tempRect]);
+                if (drawRect == 'room') {
+                    setZoneData(zoneData => {
+                        return { zones: zoneData.zones, rooms: [...zoneData.rooms, { id: tempRect.id, child: [], expanded: false, name: display, dimension: { length: { feet: tempRect.width_ft, inch: 0 }, breadth: { feet: tempRect.height_ft, inch: 0 } }, area: { feetSq: tempRect.width_ft * tempRect.height_ft, inchSq: 0 } }] }
+                    })
+                }
                 setNewRect(null);
                 isDrawing.current = false;
             }
@@ -437,14 +438,18 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 if (!stage) return;
                 const evtPos = stage.getRelativePointerPosition()!;
                 // find topmost rect containing point
+                const rects = rectsRef.current
                 for (let i = rects.length - 1; i >= 0; i--) {
                     const r = rects[i];
+                    if (r.type == 'door' || r.type == 'window') {
+                        continue
+                    }
                     if (
                         evtPos.x >= r.x && evtPos.x <= r.x + r.width &&
                         evtPos.y >= r.y && evtPos.y <= r.y + r.height
                     ) {
                         // console.log(rectsRef.current[])
-                        if (rectsRef.current[i].zone != null) continue;
+                        if (rects[i].zone != null) continue;
                         setRects(prev => prev.map((rect, idx) => idx === i ? { ...rect, selected: !rect.selected } : rect));
                         break;
                     }
@@ -476,6 +481,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 pointer.y <= imgDrawDetails?.startY + imgDrawDetails.imgDrawHeight)) {
 
                 setNewLine([pointer.x, pointer.y]);
+                newLineRef.current = [pointer.x, pointer.y]
             }
         }
     };
@@ -584,12 +590,14 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
             isDrawing.current = false;
             if (setInputModelOpen) setInputModelOpen(true)
             setNewLine(null);
+            newLineRef.current = null
             setHoverPos(null);
+            hoverPosRef.current = null;
         }
     };
 
     return (
-        <div style={{ cursor: drawRect ? drawRect === 'none' ? move ? 'grabbing' : 'auto' : 'crosshair' : move ? 'grabbing' : 'crosshair' }}>
+        <div style={{ cursor: cursor }}>
             <Stage
                 width={stageSize.width}
                 height={stageSize.height}
@@ -604,6 +612,12 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
             >
                 <Layer ref={layerRef}>
                     {image && <KonvaImage image={image} x={imgDrawDetails?.startX} y={imgDrawDetails?.startY} width={imgDrawDetails?.imgDrawWidth} height={imgDrawDetails?.imgDrawHeight} />}
+                    {step == 2 && <Rect
+                        x={imgDrawDetails?.startX} y={imgDrawDetails?.startY} width={imgDrawDetails?.imgDrawWidth} height={imgDrawDetails?.imgDrawHeight}
+                        fill="black"
+                        opacity={0.4} // adjust to control darkness
+                        listening={false} // makes it non-interactive
+                    />}
                 </Layer>
                 {step == 1 &&
                     <Layer>
@@ -659,7 +673,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                     step == 2 &&
                     <Layer>
                         {rects && rects.map((rect) => {
-                            return (
+                            return <React.Fragment key={rect.id}>
                                 <Rect
                                     key={rect.id}
                                     x={rect.x}
@@ -667,12 +681,26 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                     width={rect.width}
                                     height={rect.height}
                                     stroke={rect.selected ? 'gold' : rect.stroke}
-                                    strokeWidth={4}
-                                // onClick={() => handleClick(rect.id, index)}
-                                // hitStrokeWidth={10}
-                                // strokeHitEnabled={true}
+                                    strokeWidth={2}
                                 />
-                            );
+                                <Label key={rect.id + "_dimen"} x={rect.x + rect.width / 2 - getWordSize(rect.type == 'room' ? `${(rect.width_ft * rect.height_ft).toFixed(0)} sq ft` : `${rect.width_ft.toFixed(0)} ft`, 5) / 2} y={rect.type == 'room' ? rect.y + rect.height / 2 + 14 : rect.y - 16}>
+                                    <Text
+                                        text={rect.type == 'room' ? `${(rect.width_ft * rect.height_ft).toFixed(0)} sq ft` : `${rect.width_ft.toFixed(0)} ft`}
+                                        fontSize={14}
+                                        fill={rect.selected ? 'gold' : rect.stroke}
+                                        padding={4}     // Adjust horizontal alignment if needed
+                                    />
+                                </Label>
+                                <Label key={rect.id + "_label"} x={rect.x + rect.width / 2} y={rect.type == 'room' ? rect.y + rect.height / 2 : rect.y + rect.height}>
+                                    <Text
+                                        text={rect.id}
+                                        fontSize={14}
+                                        fill={rect.selected ? 'gold' : rect.stroke}
+                                        padding={0}
+                                        fontStyle='bold'   // Adjust horizontal alignment if needed
+                                    />
+                                </Label>
+                            </React.Fragment>;
                         })}
                         {newRect && (
                             <Rect

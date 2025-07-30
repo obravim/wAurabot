@@ -2,9 +2,35 @@ import React, { useState, useEffect, useRef } from 'react'
 import NextImage from 'next/image'
 import { CheckCircle2, Eraser, Move, ZoomInIcon, ZoomOutIcon, DoorOpen, DoorClosed } from 'lucide-react'
 import { useCanvas } from '@/app/context/CanvasContext'
-import { useZone } from '@/app/context/ZoneContext'
+import { useZone, Room } from '@/app/context/ZoneContext'
 import Compass from './Compass';
-import Canvas, { CanvasHandle } from './Canvas';
+import Canvas, { CanvasHandle, RoomCoord } from './Canvas';
+
+export type RectType = {
+    id: string;
+    name: string;
+    type: 'room' | 'door' | 'window';
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    stroke: string;
+    selected: boolean,
+    zone: number | null,
+    width_ft: number,
+    height_ft: number,
+};
+
+type WinDoor = {
+    id: string,
+    type: 'window' | 'door',
+    length: Length
+}
+
+type Length = {
+    feet: number | null,
+    inch: number | null
+}
 
 function fileToImage(file: File | null): Promise<HTMLImageElement> {
     return new Promise((resolve, reject) => {
@@ -27,9 +53,49 @@ function fileToImage(file: File | null): Promise<HTMLImageElement> {
     });
 }
 
+function getRectFromCoords(roomCoords: RoomCoord, id: string, display: string, type: 'room' | 'door' | 'window', scaleFactor: number) {
+    const [x1, y1] = roomCoords.startPoint;
+    const [x2, y2] = roomCoords.endPoint;
+    const x = Math.min(x1, x2);
+    const y = Math.min(y1, y2);
+    const width = Math.abs(x2 - x1);
+    const height = Math.abs(y2 - y1);
+    let width_ft = Math.abs(x2 - x1) * scaleFactor / 12;
+    let height_ft = 0;
+    if (type == 'room') {
+        height_ft = Math.abs(y2 - y1) * scaleFactor / 12;
+    }
+    return {
+        id, name: display, x, y, width, type, stroke: roomCoords.color, height, selected: false, zone: null, width_ft, height_ft
+    }
+}
+
+function findRoomForDoor(door: RectType, rooms: RectType[], type: string) {
+    const doorCenterX = door.x + door.width / 2;
+    const doorCenterY = door.y + door.height / 2;
+    let proximity = 20;
+    let i = 0;
+
+    for (i = 0; i < rooms.length; i++) {
+        //wall1
+        let [x1, y1, x2, y2] = [rooms[i].x, rooms[i].y, rooms[i].x + rooms[i].width, rooms[i].y + rooms[i].height]
+        if (doorCenterX >= x1 && doorCenterX <= x2 && Math.abs(doorCenterY - y1) < proximity) {
+            return i;
+        } else if (doorCenterX >= x1 && doorCenterX <= x2 && Math.abs(doorCenterY - y2) < proximity) {
+            return i;
+        } else if (doorCenterY >= y1 && doorCenterY <= y2 && Math.abs(doorCenterX - x1) < proximity) {
+            return i;
+        } else if (doorCenterY >= y1 && doorCenterY <= y2 && Math.abs(doorCenterX - x2) < proximity) {
+            return i;
+        }
+    }
+    return i - 1;
+}
+
 export default function EditView() {
     const { file, scaleFactor, roomCoords, doorCoords, windowCoords, setScaleFactor, setRoomCoords, setDoorCoords, setWindowCoords } = useCanvas();
-    const { setZones } = useZone();
+    const [rects, setRects] = useState<RectType[]>([]);
+    const { setZoneData } = useZone();
     const [image, setImage] = useState<HTMLImageElement | null>(null);
     const [move, setMove] = useState(false);
     const canvasRef = useRef<CanvasHandle>(null);
@@ -46,6 +112,45 @@ export default function EditView() {
         })();
     }, [file]);
 
+    useEffect(() => {
+        const roomsRect: RectType[] = [];
+        const doorsRect: RectType[] = [];
+        const windowsRect: RectType[] = [];
+        const rooms: Room[] = [];
+        if (roomCoords) roomCoords.forEach((room, index) => {
+            const id = "R" + index;
+            const display = "Room" + index;
+            const tempRoom = getRectFromCoords({ startPoint: [room.startPoint[0], room.startPoint[1]], endPoint: [room.endPoint[0], room.endPoint[1]], color: room.color }, id, display, 'room', scaleFactor)
+            rooms.push({ id: tempRoom.id, name: display, dimension: { length: { feet: tempRoom.width_ft, inch: 0 }, breadth: { feet: tempRoom.height_ft, inch: 0 } }, child: [], expanded: false, area: { feetSq: tempRoom.width_ft * tempRoom.height_ft, inchSq: 0 } });
+            roomsRect.push(tempRoom);
+        })
+        if (doorCoords) doorCoords.forEach((door, index) => {
+            const id = "D" + index;
+            const display = "Door" + index;
+            const tempDoor = getRectFromCoords({ startPoint: [door.startPoint[0], door.startPoint[1]], endPoint: [door.endPoint[0], door.endPoint[1]], color: door.color }, id, display, 'door', scaleFactor);
+            doorsRect.push(tempDoor);
+            const roomIndex = findRoomForDoor(tempDoor, roomsRect, 'door')
+            rooms[roomIndex].child?.push({ id: tempDoor.id, name: display, length: { feet: tempDoor.width_ft, inch: 0 }, type: "door" })
+        })
+        if (windowCoords) windowCoords.forEach((window, index) => {
+            const id = "W" + index;
+            const display = "Window" + index;
+            const tempWindow = getRectFromCoords({ startPoint: [window.startPoint[0], window.startPoint[1]], endPoint: [window.endPoint[0], window.endPoint[1]], color: window.color }, id, display, 'window', scaleFactor)
+            windowsRect.push(tempWindow);
+            const roomIndex = findRoomForDoor(tempWindow, roomsRect, 'window')
+            rooms[roomIndex].child?.push({ id: tempWindow.id, name: display, length: { feet: tempWindow.width_ft, inch: 0 }, type: "window" })
+        })
+
+        const sortedRects = [...roomsRect, ...doorsRect, ...windowsRect].sort((a, b) => {
+            // Smaller rectangles on top
+            const aSize = Math.abs(a.width) * Math.abs(a.height);
+            const bSize = Math.abs(b.width) * Math.abs(b.height);
+            return bSize - aSize;
+        });
+        setRects(sortedRects);
+        setZoneData({ zones: [], rooms: rooms })
+    }, [scaleFactor, roomCoords, doorCoords, windowCoords])
+
     const reRunDetection = async () => {
         const formData = new FormData();
         formData.append('image', file as Blob);
@@ -59,7 +164,6 @@ export default function EditView() {
             setRoomCoords(resp.roomCoords);
             setDoorCoords(resp.doorCoords);
             setWindowCoords(resp.windowsCoords);
-            setZones([])
         });
     }
 
@@ -112,7 +216,7 @@ export default function EditView() {
                     </div>
                 </div>
                 <div className='w-[650px] h-[650px]'>
-                    <Canvas ref={canvasRef} move={move} image={image} stageSize={{ width: 650, height: 650 }} setInputModelOpen={null} setPixelDist={null} drawRect={drawRect} />
+                    <Canvas ref={canvasRef} move={move} image={image} stageSize={{ width: 650, height: 650 }} setInputModelOpen={null} setPixelDist={null} drawRect={drawRect} rects={rects} setRects={setRects} />
                 </div>
                 <div className='p-6 bg-[#292730] rounded-xl'>
                     <h4 className='mb-3 font-bold'>Drawing Tools</h4>
@@ -128,7 +232,7 @@ export default function EditView() {
                         <button className={`flex items-center justify-center ${drawRect == 'window' ? "bg-[#421C7F]" : "bg-[#35333A]"}   text-[#E7E6E9] px-5 py-2 rounded-md gap-2 cursor-pointer`}
                             onClick={() => setDrawRect((drawRect) => drawRect == 'window' ? 'none' : 'window')}
                         >
-                            <NextImage src={'./window-frame.svg'} alt='logo' width={14} height={14} />
+                            <NextImage src={'./window-frame.svg'} alt='logo' width={14} height={14} className='w-auto h-auto' />
                             <span className="leading-none mt-0 text-sm">Draw Window</span>
                         </button>
                         <button className={`flex items-center justify-center ${drawRect == 'door' ? "bg-[#421C7F]" : "bg-[#35333A]"}  text-[#E7E6E9] px-5 py-2 rounded-md gap-2 cursor-pointer`}

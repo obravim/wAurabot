@@ -120,18 +120,18 @@ const response = {
 export default function Home() {
   const { step, setStep } = useStep();
   // const [scaleResult, setScaleResult] = useState<{ scaleFactor: number, roomCoords: { startPoint: number[], endPoint: number[], color: string }[] } | null>(null);
-  const { setCanvasFile, setRoomCoords, setScaleFactor, setDoorCoords, setWindowCoords } = useCanvas();
+  // const { setCanvasFile, setRoomCoords, setScaleFactor, setDoorCoords, setWindowCoords } = useCanvas();
 
-  useEffect(() => {
-    getFileFromUrl("/floor-plan.png", "floor-plan.png").then(file => {
-      setRoomCoords(response.roomCoords);
-      setDoorCoords(response.doorCoords);
-      setWindowCoords(response.windowsCoords);
-      setScaleFactor(response.scaleFactor);
-      setCanvasFile(file);
-      setStep(2)
-    })
-  }, [setCanvasFile, setRoomCoords, setScaleFactor, setStep])
+  // useEffect(() => {
+  //   getFileFromUrl("/floor-plan.png", "floor-plan.png").then(file => {
+  //     setRoomCoords(response.roomCoords);
+  //     setDoorCoords(response.doorCoords);
+  //     setWindowCoords(response.windowsCoords);
+  //     setScaleFactor(response.scaleFactor);
+  //     setCanvasFile(file);
+  //     setStep(2)
+  //   })
+  // }, [setCanvasFile, setRoomCoords, setScaleFactor, setStep])
 
 
   return <main className='grow flex relative' >

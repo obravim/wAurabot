@@ -6,7 +6,7 @@ import { useStep } from "@/app/context/StepContext";
 
 
 function UploadView() {
-    const { file, setCanvasFile, setScaleFactor, setRoomCoords } = useCanvas();
+    const { file, setCanvasFile, setScaleFactor, setRoomCoords, setDoorCoords, setWindowCoords } = useCanvas();
     const { setStep } = useStep();
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -24,6 +24,8 @@ function UploadView() {
             const resp = data.response;
             setScaleFactor(resp.scaleFactor);
             setRoomCoords(resp.roomCoords);
+            setDoorCoords(resp.doorCoords);
+            setWindowCoords(resp.windowsCoords);
             setStep(1);
         });
 

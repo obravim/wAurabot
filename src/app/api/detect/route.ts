@@ -25,7 +25,7 @@ export async function POST(req: NextRequest) {
     // const fileUrl = `/uploads/${fileName}`; // public path
     const response = {
         // fileUrl,
-        scaleFacter: 0.3179235808186732,
+        scaleFactor: 0.3179235808186732,
         roomCoords: [
             {
                 startPoint: [79.72, 309.92],
@@ -71,6 +71,55 @@ export async function POST(req: NextRequest) {
                 startPoint: [286.98, 267.18],
                 endPoint: [357.89, 351.60],
                 color: "blue"
+            },
+        ],
+        windowsCoords: [
+            {
+                startPoint: [462.60, 93.19],
+                endPoint: [532.91, 104.65],
+                color: "cyan"
+            },
+            {
+                startPoint: [153.14, 93.59],
+                endPoint: [223.26, 105.56],
+                color: "cyan"
+            },
+            {
+                startPoint: [301.46, 513.92],
+                endPoint: [344.20, 521.79],
+                color: "cyan"
+            },
+            {
+                startPoint: [346.26, 93.14],
+                endPoint: [416.40, 104.09],
+                color: "cyan"
+            },
+            {
+                startPoint: [435.06, 512.57],
+                endPoint: [505.05, 522.00],
+                color: "cyan"
+            },
+        ],
+        doorCoords: [
+            {
+                startPoint: [315.43, 351.53],
+                endPoint: [356.40, 395.82],
+                color: "purple"
+            },
+            {
+                startPoint: [244.42, 311.22],
+                endPoint: [287.67, 351.01],
+                color: "purple"
+            },
+            {
+                startPoint: [356.44, 311.23],
+                endPoint: [400.54, 350.45],
+                color: "purple"
+            },
+            {
+                startPoint: [257.94, 264.28],
+                endPoint: [303.47, 302.64],
+                color: "purple"
             },
         ]
     };
