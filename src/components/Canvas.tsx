@@ -1,12 +1,12 @@
 'use client'
 
-import { Stage, Layer, Text, Rect, Line, Label, Tag, Image as KonvaImage, Circle } from 'react-konva';
+import { Stage, Layer, Text, Rect, Line, Label, Tag, Image as KonvaImage, Circle, Transformer } from 'react-konva';
 import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import Konva from 'konva';
-import { RectType } from './EditView';
+import { forEachRoom, getRoomFromCoords } from './EditView';
 import { useStep } from '@/app/context/StepContext';
 import { useCanvas } from '@/app/context/CanvasContext';
-import { useZone, Zone, ZoneData } from '@/app/context/ZoneContext';
+import { useZone, Zone, ZoneData, Room, WinDoor } from '@/app/context/ZoneContext';
 
 export type CanvasHandle = {
     zoomStage: (direction: "in" | "out", scaleFactor: number) => void;
@@ -21,13 +21,11 @@ type CanvasProps = {
     setInputModelOpen: ((inputModelOpen: boolean) => void) | null,
     setPixelDist: ((pixelDist: number) => void) | null,
     stageSize: { width: number, height: number },
-    rects: RectType[]
-    setRects: React.Dispatch<React.SetStateAction<RectType[]>>
 };
 
 type Point = [number, number]
 
-export type RoomCoord = {
+export type RectCoord = {
     startPoint: Point;
     endPoint: Point;
     color: string;
@@ -48,24 +46,42 @@ function getWordSize(text: string, fontSize: number) {
     return text.length * (fontSize);
 }
 
-function getRectFromCoords(roomCoords: RoomCoord, id: string, display: string, type: 'room' | 'door' | 'window', scaleFactor: number) {
-    const [x1, y1] = roomCoords.startPoint;
-    const [x2, y2] = roomCoords.endPoint;
-    const x = Math.min(x1, x2);
-    const y = Math.min(y1, y2);
-    const width = Math.abs(x2 - x1);
-    const height = Math.abs(y2 - y1);
-    let width_ft = Math.abs(x2 - x1) * scaleFactor / 12;
-    let height_ft = 0;
-    if (type == 'room') {
-        height_ft = Math.abs(y2 - y1) * scaleFactor / 12;
+export function unSelectRooms(prev: ZoneData) {
+    const updatedRooms = new Map(prev.rooms);
+    for (const [id, room] of updatedRooms.entries()) {
+        if (room.selected) updatedRooms.set(id, { ...room, selected: false });
     }
-    return {
-        id, name: display, x, y, width, type, stroke: roomCoords.color, height, selected: false, zone: null, width_ft, height_ft
+    return { ...prev, rooms: updatedRooms };
+}
+
+function distancePoints(pointA: Point, pointB: Point) {
+    return Math.sqrt(
+        Math.pow(pointA[0] - pointB[0], 2) +
+        Math.pow(pointA[1] - pointB[1], 2)
+    );
+}
+
+function getRoomAnchors(room: Room) {
+    const { x, y, length, breadth } = room.pos;
+    return [
+        { x: x, y: y, type: 'tl' },                             // top-left
+        { x: x + length, y: y, type: 'tr' },                    // top-right
+        { x: x, y: y + breadth, type: 'bl' },                   // bottom-left
+        { x: x + length, y: y + breadth, type: 'br' },          // bottom-right
+    ];
+}
+
+function getCursorForAnchor(type: string, defaultCursor: string): string {
+    switch (type) {
+        case 'tl': return 'nwse-resize';
+        case 'tr': return 'nesw-resize';
+        case 'bl': return 'nesw-resize';
+        case 'br': return 'nwse-resize';
+        default: return defaultCursor;
     }
 }
 
-const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputModelOpen, setPixelDist, stageSize, drawRect, rects, setRects }, ref) => {
+const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputModelOpen, setPixelDist, stageSize, drawRect }, ref) => {
     const { step } = useStep();
     const [imgDrawDetails, setImgDrawDetails] = useState<ImgDrawDetails>();
     const stageRef = useRef<Konva.Stage>(null);
@@ -80,16 +96,31 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const hoverPosRef = useRef<number[] | null>(null);
     const [dimText, setDimText] = useState<string>("");
     const isDrawing = useRef(false);
-    const { scaleFactor, roomCoords, doorCoords, windowCoords } = useCanvas();
-    const [newRect, setNewRect] = useState<RoomCoord | null>(null);
-    const rectsRef = useRef<RectType[]>([]);
-    const { zoneData, setZoneData } = useZone();
-    const zoneDataRef = useRef<ZoneData>({ zones: [], rooms: [] });
+    const { scaleFactor } = useCanvas();
+    const [newRect, setNewRect] = useState<RectCoord | null>(null);
+    const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+    const { zoneData, setZoneData, multiSelect } = useZone();
+    const zoneDataRef = useRef<ZoneData>({ zones: [], orphanRoomIds: [], rooms: new Map<string, Room>(), windoors: new Map<string, WinDoor>() });
     const [cursor, setCursor] = useState<'grabbing' | 'crosshair' | 'auto'>('auto');
+    const transformerRef = useRef<Konva.Transformer>(null);
+    const roomRef = useRef<Konva.Rect>(null);
+    const roomNodeRef = useRef<Konva.Rect | null>(null); // ← NEW
 
-    useEffect(() => {
-        rectsRef.current = rects;
-    }, [rects]);
+    // useEffect(() => {
+    //     if (transformerRef.current && roomNodeRef.current) {
+    //         transformerRef.current.nodes([roomNodeRef.current]);
+    //         transformerRef.current.getLayer()?.batchDraw();
+    //     }
+    // }, [selectedRoomId, zoneData]);
+
+    // useEffect(() => {
+    //     if (!selectedRoomId) {
+    //         roomNodeRef.current = null;
+    //         if (!transformerRef.current) return;
+    //         transformerRef.current.nodes([]);
+    //         transformerRef.current.getLayer()?.batchDraw();
+    //     }
+    // }, [selectedRoomId]);
 
     useEffect(() => {
         zoneDataRef.current = zoneData;
@@ -126,46 +157,48 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 if (step == 2) {
                     setNewRect(null);
                     isDrawing.current = false;
-                    setRects((rects: RectType[]) => {
-                        return rects.map((rect: RectType) => {
-                            return { ...rect, selected: false };
-                        })
-                    })
+                    setZoneData(unSelectRooms);
                 }
             }
             if (e.ctrlKey && e.key.toLowerCase() === 'g') {
                 e.preventDefault();
                 if (step != 2) return;
-                const selectedRooms = rectsRef.current.filter(rect => {
-                    return rect.selected && rect.zone == null && rect.type === 'room'
-                });
-                if (selectedRooms.length == 0) {
+                const selectedRoomIds = Array.from(zoneDataRef.current.rooms.values())
+                    .filter(room => room.selected && room.zone == null)
+                    .map(room => room.id);
+
+                if (selectedRoomIds.length === 0) {
                     alert("No object selected!");
                     return;
+                }
+
+                const newZone: Zone = {
+                    id: "zone" + zoneData.zones.length,
+                    roomIds: selectedRoomIds,
+                    color: "black",
+                    expanded: false,
+                    name: "Zone" + zoneData.zones.length
                 };
-                const selectedRoomIds = selectedRooms.map(room => room.id);
-                const zoneData = zoneDataRef.current
-                const zoneRooms = selectedRooms.map(room => {
-                    return { expanded: false, id: room.id, name: room.name, dimension: { length: null, breadth: null }, area: null, child: null }
-                })
-                const zone: Zone = { id: zoneData.zones.length + 1, rooms: zoneRooms, color: "black", expanded: false };
-                setZoneData(zoneData => {
-                    return {
-                        zones: [...zoneData.zones, zone], rooms: zoneData.rooms.filter(room => {
-                            return !(room.id in selectedRoomIds)
-                        })
-                    }
-                })
-                setRects((rects) => {
-                    return rects.map(rect => {
-                        if (rect.selected && rect.zone == null) {
-                            rect.stroke = zone.color
-                            rect.zone = zone.id;
+
+                setZoneData(prev => {
+                    const updatedRooms = new Map(prev.rooms);
+                    const updatedOrphans = prev.orphanRoomIds.filter(id => !selectedRoomIds.includes(id));
+
+                    // update zone reference inside each room
+                    selectedRoomIds.forEach(id => {
+                        const room = updatedRooms.get(id);
+                        if (room) {
+                            updatedRooms.set(id, { ...room, zone: newZone.id, selected: false, stroke: newZone.color });
                         }
-                        rect.selected = false;
-                        return rect
-                    })
-                })
+                    });
+
+                    return {
+                        ...prev,
+                        zones: [...prev.zones, newZone],
+                        rooms: updatedRooms,
+                        orphanRoomIds: updatedOrphans,
+                    };
+                });
             }
         };
 
@@ -322,18 +355,20 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 }
             }
         } else if (step == 2) {
-            if (drawRect == 'none') return;
-            if (isDrawing.current) return;
             const stage = stageRef.current;
             if (!stage) return;
             const pointer = stage.getRelativePointerPosition();
-            if (!pointer || !imgDrawDetails || !(pointer.x >= imgDrawDetails?.startX &&
-                pointer.x <= imgDrawDetails?.startX + imgDrawDetails.imgDrawWidth &&
-                pointer.y >= imgDrawDetails?.startY &&
-                pointer.y <= imgDrawDetails?.startY + imgDrawDetails.imgDrawHeight)) return;
+            if (!pointer) return;
+            if (drawRect != 'none') {
+                if (isDrawing.current) return;
+                if (!pointer || !imgDrawDetails || !(pointer.x >= imgDrawDetails?.startX &&
+                    pointer.x <= imgDrawDetails?.startX + imgDrawDetails.imgDrawWidth &&
+                    pointer.y >= imgDrawDetails?.startY &&
+                    pointer.y <= imgDrawDetails?.startY + imgDrawDetails.imgDrawHeight)) return;
 
-            setNewRect({ startPoint: [pointer.x, pointer.y], endPoint: [pointer.x, pointer.y], color: 'blue' });
-            isDrawing.current = true;
+                setNewRect({ startPoint: [pointer.x, pointer.y], endPoint: [pointer.x, pointer.y], color: 'blue' });
+                isDrawing.current = true;
+            }
         }
     };
 
@@ -343,9 +378,46 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
             setDimText("");
         }
         else if (step == 2) {
-            setRects(rects => {
-                return rects.filter(rect => !rect.selected);
-            })
+            const roomIdsToDelete = Array.from(zoneData.rooms.values())
+                .filter(room => room.selected)
+                .map(room => room.id);
+
+            setZoneData(prev => {
+                const newRooms = new Map(prev.rooms);
+                const newZones = prev.zones.map(zone => ({
+                    ...zone,
+                    roomIds: zone.roomIds.filter(id => !roomIdsToDelete.includes(id))
+                }));
+                const newOrphanRoomIds = prev.orphanRoomIds.filter(id => !roomIdsToDelete.includes(id));
+
+                // Remove from the rooms map
+                roomIdsToDelete.forEach(id => {
+                    newRooms.delete(id);
+                });
+
+                return {
+                    ...prev,
+                    rooms: newRooms,
+                    zones: newZones,
+                    orphanRoomIds: newOrphanRoomIds
+                };
+            });
+            // const selectedRoomIds = rectsRef.current.filter(rect => {
+            //     return rect.selected
+            // }).map(rect => rect.id);
+            // const selectedSet = new Set(selectedRoomIds);
+            // setRoomRects(roomRects => {
+            //     return roomRects.filter(rect => !rect.selected);
+            // })
+            // setZoneData(zoneData => {
+            //     return {
+            //         zones: zoneData.zones.map(zone => ({
+            //             ...zone,
+            //             rooms: zone.rooms.filter(room => !selectedSet.has(room.id))
+            //         })),
+            //         rooms: zoneData.rooms.filter(room => !selectedSet.has(room.id))
+            //     };
+            // });
         }
     };
 
@@ -421,12 +493,14 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
         lastPos.current = null;
         if (step == 2) {
             if (drawRect != 'none' && newRect) {
-                const display = drawRect.charAt(0).toUpperCase + drawRect.substring(1)
-                const tempRect = getRectFromCoords(newRect, drawRect.charAt(0).toUpperCase() + rectsRef.current.length, display, drawRect, scaleFactor);
-                setRects((prev) => [...prev, tempRect]);
+                if (distancePoints(newRect.startPoint, newRect.endPoint) <= 5) return
+                const display = drawRect.charAt(0).toUpperCase() + drawRect.substring(1) + zoneDataRef.current.orphanRoomIds.length
+                const tempRect = getRoomFromCoords({ roomCoords: newRect, id: drawRect.charAt(0).toUpperCase() + zoneDataRef.current.orphanRoomIds.length+1, display, scaleFactor, selected: true });
                 if (drawRect == 'room') {
                     setZoneData(zoneData => {
-                        return { zones: zoneData.zones, rooms: [...zoneData.rooms, { id: tempRect.id, child: [], expanded: false, name: display, dimension: { length: { feet: tempRect.width_ft, inch: 0 }, breadth: { feet: tempRect.height_ft, inch: 0 } }, area: { feetSq: tempRect.width_ft * tempRect.height_ft, inchSq: 0 } }] }
+                        const rooms = new Map(zoneData.rooms);
+                        rooms.set(tempRect.id, tempRect);
+                        return { ...zoneData, orphanRoomIds: [...zoneData.orphanRoomIds, tempRect.id], rooms: rooms }
                     })
                 }
                 setNewRect(null);
@@ -437,28 +511,62 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 const stage = stageRef.current;
                 if (!stage) return;
                 const evtPos = stage.getRelativePointerPosition()!;
+                const sortedRoomList = [
+                    // Rooms inside zones
+                    ...zoneData.zones.flatMap(zone => zone.roomIds),
+                    // Orphan rooms
+                    ...zoneData.orphanRoomIds
+                ].sort((a, b) => {
+                    const roomA = zoneData.rooms.get(a);
+                    const roomB = zoneData.rooms.get(b);
+                    if (!roomA || !roomB) return 0;
+                    if (roomA.selected && !roomB.selected) return -1;
+                    if (!roomA.selected && roomB.selected) return 1;
+                    // Smaller rectangles on top
+                    const aSize = Math.abs(roomA.pos.length) * Math.abs(roomA.pos.breadth);
+                    const bSize = Math.abs(roomB.pos.length) * Math.abs(roomB.pos.breadth);
+                    return aSize - bSize;
+                })
                 // find topmost rect containing point
-                const rects = rectsRef.current
-                for (let i = rects.length - 1; i >= 0; i--) {
-                    const r = rects[i];
-                    if (r.type == 'door' || r.type == 'window') {
-                        continue
+                for (const roomId of sortedRoomList) {
+                    const r = zoneData.rooms.get(roomId);
+                    if (!r) continue;
+
+                    const isInside =
+                        evtPos.x >= r.pos.x &&
+                        evtPos.x <= r.pos.x + r.pos.length &&
+                        evtPos.y >= r.pos.y &&
+                        evtPos.y <= r.pos.y + r.pos.breadth;
+
+                    if (!isInside) continue;
+
+                    const newRooms = new Map(zoneData.rooms);
+
+                    // Unselect the previously selected room (if any)
+                    if (!multiSelect && selectedRoomId && selectedRoomId !== r.id) {
+                        const prev = newRooms.get(selectedRoomId);
+                        if (prev) {
+                            newRooms.set(selectedRoomId, { ...prev, selected: false });
+                        }
                     }
-                    if (
-                        evtPos.x >= r.x && evtPos.x <= r.x + r.width &&
-                        evtPos.y >= r.y && evtPos.y <= r.y + r.height
-                    ) {
-                        // console.log(rectsRef.current[])
-                        if (rects[i].zone != null) continue;
-                        setRects(prev => prev.map((rect, idx) => idx === i ? { ...rect, selected: !rect.selected } : rect));
-                        break;
-                    }
+                    multiSelect && selectedRoomId && setSelectedRoomId(null);
+
+                    const wasSelected = r.selected;
+                    const shouldSelect = !wasSelected;
+
+                    // Update clicked room's selection
+                    newRooms.set(r.id, { ...r, selected: shouldSelect });
+
+                    setZoneData((prev) => ({ ...prev, rooms: newRooms }));
+
+                    // Update selectedRoomId state accordingly
+                    !multiSelect && setSelectedRoomId(shouldSelect ? r.id : null);
+                    break;
                 }
+
             }
-
         }
-
-    };
+    }
 
     const handleTouchStart = () => {
         if (step == 1) {
@@ -596,6 +704,38 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
         }
     };
 
+    function updateRoomPosition(id: string, x: number, y: number) {
+        setZoneData((prev) => {
+            const updated = new Map(prev.rooms);
+            const room = updated.get(id);
+            if (!room) return prev;
+
+            updated.set(id, { ...room, pos: { ...room.pos, x, y } });
+            return { ...prev, rooms: updated };
+        });
+    }
+
+
+    function updateRoomTransform(id: string, x: number, y: number, width: number, height: number) {
+        setZoneData((prev) => {
+            const updated = new Map(prev.rooms);
+            const room = updated.get(id);
+            if (!room) return prev;
+
+            updated.set(id, {
+                ...room,
+                pos: { x, y, length: width, breadth: height },
+                dimension: {
+                    ...room.dimension,
+                    length_ft: width / 10,
+                    breadth_ft: height / 10,
+                },
+            });
+            return { ...prev, rooms: updated };
+        });
+    }
+
+
     return (
         <div style={{ cursor: cursor }}>
             <Stage
@@ -672,34 +812,174 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 {
                     step == 2 &&
                     <Layer>
-                        {rects && rects.map((rect) => {
-                            return <React.Fragment key={rect.id}>
+                        {[
+                            // Rooms inside zones
+                            ...zoneData.zones.flatMap(zone => zone.roomIds),
+                            // Orphan rooms
+                            ...zoneData.orphanRoomIds
+                        ].sort((a, b) => {
+                            const roomA = zoneData.rooms.get(a);
+                            const roomB = zoneData.rooms.get(b);
+                            if (!roomA || !roomB) return 0;
+                            if (roomA.selected && !roomB.selected) return -1;
+                            if (!roomA.selected && roomB.selected) return 1;
+                            // Smaller rectangles on top
+                            const aSize = Math.abs(roomA.pos.length) * Math.abs(roomA.pos.breadth);
+                            const bSize = Math.abs(roomB.pos.length) * Math.abs(roomB.pos.breadth);
+                            return bSize - aSize;
+                        }).map(roomId => {
+                            const room = zoneData.rooms.get(roomId);
+                            if (!room) return null;
+                            const roomRect = room.pos
+
+                            return <React.Fragment key={room.id}>
                                 <Rect
-                                    key={rect.id}
-                                    x={rect.x}
-                                    y={rect.y}
-                                    width={rect.width}
-                                    height={rect.height}
-                                    stroke={rect.selected ? 'gold' : rect.stroke}
+                                    // ref={(node) => {
+                                    //     if (room.selected && node) roomNodeRef.current = node;
+                                    // }}
+                                    key={room.id}
+                                    x={roomRect.x}
+                                    y={roomRect.y}
+                                    width={roomRect.length}
+                                    height={roomRect.breadth}
+                                    stroke={room.selected ? 'gold' : room.stroke}
                                     strokeWidth={2}
+                                // draggable={room.selected}
+                                // onDragEnd={(e) => {
+                                //     const newX = e.target.x();
+                                //     const newY = e.target.y();
+                                //     updateRoomPosition(room.id, newX, newY);
+                                // }}
+                                // onTransformEnd={(e) => {
+                                //     const node = e.target;
+                                //     const scaleX = node.scaleX();
+                                //     const scaleY = node.scaleY();
+
+                                //     // ✅ Reset scale so future anchors behave normally
+                                //     node.scaleX(1);
+                                //     node.scaleY(1);
+
+                                //     const newWidth = Math.max(10, node.width() * scaleX);
+                                //     const newHeight = Math.max(10, node.height() * scaleY);
+                                //     const newX = node.x();
+                                //     const newY = node.y();
+
+                                //     updateRoomTransform(room.id, newX, newY, newWidth, newHeight);
+                                // }}
                                 />
-                                <Label key={rect.id + "_dimen"} x={rect.x + rect.width / 2 - getWordSize(rect.type == 'room' ? `${(rect.width_ft * rect.height_ft).toFixed(0)} sq ft` : `${rect.width_ft.toFixed(0)} ft`, 5) / 2} y={rect.type == 'room' ? rect.y + rect.height / 2 + 14 : rect.y - 16}>
+                                <Label key={room.id + "_label"} x={roomRect.x + roomRect.length / 2 - 20} y={roomRect.y + roomRect.breadth / 2 - 20} /*roomRect.y + roomRect.height} */>
                                     <Text
-                                        text={rect.type == 'room' ? `${(rect.width_ft * rect.height_ft).toFixed(0)} sq ft` : `${rect.width_ft.toFixed(0)} ft`}
+                                        text={room.name}
                                         fontSize={14}
-                                        fill={rect.selected ? 'gold' : rect.stroke}
-                                        padding={4}     // Adjust horizontal alignment if needed
-                                    />
-                                </Label>
-                                <Label key={rect.id + "_label"} x={rect.x + rect.width / 2} y={rect.type == 'room' ? rect.y + rect.height / 2 : rect.y + rect.height}>
-                                    <Text
-                                        text={rect.id}
-                                        fontSize={14}
-                                        fill={rect.selected ? 'gold' : rect.stroke}
+                                        fill={room.selected ? 'gold' : room.stroke}
                                         padding={0}
                                         fontStyle='bold'   // Adjust horizontal alignment if needed
                                     />
                                 </Label>
+                                <Label key={room.id + "_dimen"} x={roomRect.x + roomRect.length / 2 - getWordSize(`${room.dimension.length_ft.toFixed(2)} * ${room.dimension.breadth_ft.toFixed(2)} ft`, 5) / 2} y={roomRect.y + roomRect.breadth / 2 - 10}>
+                                    <Text
+                                        text={`${room.dimension.length_ft.toFixed(2)} * ${room.dimension.breadth_ft.toFixed(2)} ft`}
+                                        fontSize={12}
+                                        fill={room.selected ? 'gold' : room.stroke}
+                                        padding={4}     // Adjust horizontal alignment if needed
+                                    />
+                                </Label>
+                                <Label key={room.id + "_area"} x={roomRect.x + roomRect.length / 2 - getWordSize(`${(room.dimension.length_ft * room.dimension.breadth_ft).toFixed(2)} sq ft`, 5) / 2} y={roomRect.y + roomRect.breadth / 2 + 2}>
+                                    <Text
+                                        text={`${(room.dimension.length_ft * room.dimension.breadth_ft).toFixed(2)} sq ft`}
+                                        fontSize={12}
+                                        fill={room.selected ? 'gold' : room.stroke}
+                                        padding={4}     // Adjust horizontal alignment if needed
+                                    />
+                                </Label>
+                                <Label key={room.id + "_height"} x={roomRect.x + roomRect.length / 2 - getWordSize(`${room.dimension.ceilingHeight_ft.toFixed(2)} ft`, 5) / 2} y={roomRect.y + roomRect.breadth / 2 + 14}>
+                                    <Text
+                                        text={`${room.dimension.ceilingHeight_ft.toFixed(2)} ft`}
+                                        fontSize={12}
+                                        fill={room.selected ? 'gold' : room.stroke}
+                                        padding={4}     // Adjust horizontal alignment if needed
+                                    />
+                                </Label>
+                                {
+                                    room.children.map(windoorId => {
+                                        const windoor = zoneData.windoors.get(windoorId);
+                                        if (!windoor) return null;
+                                        return <React.Fragment key={windoor.id} >
+                                            <Rect
+                                                key={windoor.id}
+                                                x={windoor.pos.x}
+                                                y={windoor.pos.y}
+                                                width={windoor.pos.length}
+                                                height={windoor.pos.breadth}
+                                                stroke={room.selected ? 'gold' : room.stroke}
+                                                strokeWidth={1}
+                                                listening={false}
+                                            />
+                                            <Label key={windoor.id + "_label"} x={windoor.pos.x + windoor.pos.length / 2 - 6} y={windoor.pos.y + windoor.pos.breadth / 2 - (windoor.type == 'window' ? 4 : 15)} >
+                                                <Text
+                                                    text={windoor.id}
+                                                    fontSize={10}
+                                                    fill={room.selected ? 'gold' : room.stroke}
+                                                    padding={0}
+                                                    fontStyle='bold'   // Adjust horizontal alignment if needed
+                                                />
+                                            </Label>
+                                            <Label key={windoor.id + "_dimen"}
+                                                x={windoor.type == 'window' ? windoor.horizontal ? windoor.pos.x + windoor.pos.length / 2 - 10 : windoor.pos.x + windoor.pos.length + 2
+                                                    : windoor.pos.x + windoor.pos.length / 2 - 20
+                                                }
+                                                y={windoor.type == 'window' ? windoor.horizontal ? windoor.pos.y + windoor.pos.breadth + 2 : windoor.pos.y + windoor.pos.breadth / 2 - 10
+                                                    : windoor.pos.y + windoor.pos.breadth / 2 - 5
+                                                }>
+                                                <Text
+                                                    text={`${windoor.dimension.length_ft.toFixed(2)} ft x \n ${windoor.dimension.height_ft.toFixed(2)} ft`}
+                                                    fontSize={10}
+                                                    fill={room.selected ? 'gold' : room.stroke}
+                                                    padding={0}
+                                                    fontStyle='bold'   // Adjust horizontal alignment if needed
+                                                />
+                                            </Label>
+                                        </React.Fragment>
+                                    })
+                                }
+                                {/* {
+                                    room.selected &&
+                                    getRoomAnchors(room).map((anchor, idx) => (
+                                        <Circle
+                                            key={room.id + "_anchor_" + anchor.type}
+                                            x={anchor.x}
+                                            y={anchor.y}
+                                            radius={4}
+                                            fill="white"
+                                            stroke="black"
+                                            strokeWidth={1}
+                                            draggable
+                                            dragOnTop
+                                            onDragMove={(e) =>
+                                                handleAnchorDrag(room.id, anchor.type, e.target.x(), e.target.y())
+                                            }
+                                            hitStrokeWidth={20}
+                                        // onMouseEnter={(e) => {
+                                        //     const container = stageRef.current?.container();
+                                        //     if (container) {
+                                        //         container.style.cursor = getCursorForAnchor(anchor.type, cursor);
+                                        //     }
+                                        // }}
+                                        // onMouseLeave={(e) => {
+                                        //     const container = stageRef.current?.container();
+                                        //     if (container) {
+                                        //         container.style.cursor = cursor;
+                                        //     }
+                                        // }}
+                                        // onDragEnd={(e) => {
+                                        //     const container = stageRef.current?.container();
+                                        //     if (container) {
+                                        //         container.style.cursor = cursor; // ✅ Reset cursor here
+                                        //     }
+                                        // }}
+                                        />
+                                    ))
+                                } */}
                             </React.Fragment>;
                         })}
                         {newRect && (
@@ -714,10 +994,20 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                 listening={false}
                             />
                         )}
+                        {/* <Transformer
+                            ref={transformerRef}
+                            rotateEnabled={false} // or true if needed
+                            anchorSize={6}
+                            boundBoxFunc={(oldBox, newBox) => {
+                                // Optional: prevent shrinking too small
+                                if (newBox.width < 10 || newBox.height < 10) return oldBox;
+                                return newBox;
+                            }}
+                        /> */}
                     </Layer>
                 }
             </Stage>
-        </div>
+        </div >
     )
 });
 

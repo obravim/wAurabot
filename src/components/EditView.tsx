@@ -2,29 +2,42 @@ import React, { useState, useEffect, useRef } from 'react'
 import NextImage from 'next/image'
 import { CheckCircle2, Eraser, Move, ZoomInIcon, ZoomOutIcon, DoorOpen, DoorClosed } from 'lucide-react'
 import { useCanvas } from '@/app/context/CanvasContext'
-import { useZone, Room } from '@/app/context/ZoneContext'
+import { useZone, Room, WinDoor, Zone, ZoneData } from '@/app/context/ZoneContext'
 import Compass from './Compass';
-import Canvas, { CanvasHandle, RoomCoord } from './Canvas';
+import Canvas, { CanvasHandle, RectCoord } from './Canvas';
 
-export type RectType = {
+const DEFAULT_CEILING_HEIGHT_FT = 10;
+const DEFAULT_WINDOW_HEIGHT_FT = 5;
+const DEFAULT_DOOR_HEIGHT_FT = 8;
+
+export type RoomRectType = {
     id: string;
     name: string;
-    type: 'room' | 'door' | 'window';
     x: number;
     y: number;
-    width: number;
-    height: number;
+    length: number;
+    breadth: number;
     stroke: string;
     selected: boolean,
     zone: number | null,
-    width_ft: number,
-    height_ft: number,
+    length_ft: number,
+    breadth_ft: number,
+    ceilingHeight_ft: number;
+    children: WinDoorRectType[]
 };
 
-type WinDoor = {
-    id: string,
-    type: 'window' | 'door',
-    length: Length
+export type WinDoorRectType = {
+    id: string;
+    name: string,
+    type: 'window' | 'door';
+    x: number;
+    y: number;
+    length: number;
+    breadth: number;
+    stroke: string;
+    length_ft: number;
+    height_ft: number;
+    horizontal: boolean
 }
 
 type Length = {
@@ -53,32 +66,83 @@ function fileToImage(file: File | null): Promise<HTMLImageElement> {
     });
 }
 
-function getRectFromCoords(roomCoords: RoomCoord, id: string, display: string, type: 'room' | 'door' | 'window', scaleFactor: number) {
+function getWinDoorFromCoords(rectCoords: RectCoord, id: string, display: string, type: 'door' | 'window', scaleFactor: number) {
+    const [x1, y1] = rectCoords.startPoint;
+    const [x2, y2] = rectCoords.endPoint;
+    const x = Math.min(x1, x2);
+    const y = Math.min(y1, y2);
+    const length = Math.abs(x2 - x1);
+    const breadth = Math.abs(y2 - y1);
+    const horizontal = length > breadth;
+    const length_ft = Math.abs(horizontal ? length : breadth) * scaleFactor / 12;
+    const height_ft = type === 'door' ? DEFAULT_DOOR_HEIGHT_FT : DEFAULT_WINDOW_HEIGHT_FT;
+    return {
+        id, name: display, type,
+        pos: { x, y, length, breadth },
+        stroke: rectCoords.color,
+        dimension: { length_ft, height_ft },
+        horizontal
+    }
+}
+
+export function getRoomFromCoords({ roomCoords, id, display, scaleFactor, selected = false }: { roomCoords: RectCoord, id: string, display: string, scaleFactor: number, selected?: boolean }) {
     const [x1, y1] = roomCoords.startPoint;
     const [x2, y2] = roomCoords.endPoint;
     const x = Math.min(x1, x2);
     const y = Math.min(y1, y2);
-    const width = Math.abs(x2 - x1);
-    const height = Math.abs(y2 - y1);
-    let width_ft = Math.abs(x2 - x1) * scaleFactor / 12;
-    let height_ft = 0;
-    if (type == 'room') {
-        height_ft = Math.abs(y2 - y1) * scaleFactor / 12;
-    }
+    const length = Math.abs(x2 - x1);
+    const breadth = Math.abs(y2 - y1);
+    let length_ft = Math.abs(x2 - x1) * scaleFactor / 12;
+    let breadth_ft = Math.abs(y2 - y1) * scaleFactor / 12;
+    let ceilingHeight_ft = DEFAULT_CEILING_HEIGHT_FT;
     return {
-        id, name: display, x, y, width, type, stroke: roomCoords.color, height, selected: false, zone: null, width_ft, height_ft
+        id,
+        name: display,
+        pos: { x, y, length, breadth },
+        stroke: roomCoords.color,
+        selected: selected,
+        zone: null,
+        dimension: {
+            length_ft,
+            breadth_ft,
+            ceilingHeight_ft
+        },
+        children: [],
+        expanded: false
     }
 }
 
-function findRoomForDoor(door: RectType, rooms: RectType[], type: string) {
-    const doorCenterX = door.x + door.width / 2;
-    const doorCenterY = door.y + door.height / 2;
+export function forEachRoom(zoneData: ZoneData, callback: (room: Room) => void) {
+    const { zones, orphanRoomIds, rooms } = zoneData;
+
+    // Loop through rooms inside zones
+    for (const zone of zones) {
+        for (const roomId of zone.roomIds) {
+            const room = rooms.get(roomId);
+            if (room && callback(room)) return;
+        }
+    }
+
+    // Loop through orphan rooms
+    for (const roomId of orphanRoomIds) {
+        const room = rooms.get(roomId);
+        if (room && callback(room)) return;
+    }
+}
+
+
+function findRoomForWinDoor(door: WinDoor, roomIds: string[], rooms: Map<string, Room>) {
+    const doorCenterX = door.pos.x + door.pos.length / 2;
+    const doorCenterY = door.pos.y + door.pos.breadth / 2;
     let proximity = 20;
     let i = 0;
 
-    for (i = 0; i < rooms.length; i++) {
+    for (i = 0; i < roomIds.length; i++) {
+
+        const room = rooms.get(roomIds[i]);
+        if (!room) continue;
         //wall1
-        let [x1, y1, x2, y2] = [rooms[i].x, rooms[i].y, rooms[i].x + rooms[i].width, rooms[i].y + rooms[i].height]
+        let [x1, y1, x2, y2] = [room.pos.x, room.pos.y, room.pos.x + room.pos.length, room.pos.y + room.pos.breadth]
         if (doorCenterX >= x1 && doorCenterX <= x2 && Math.abs(doorCenterY - y1) < proximity) {
             return i;
         } else if (doorCenterX >= x1 && doorCenterX <= x2 && Math.abs(doorCenterY - y2) < proximity) {
@@ -94,12 +158,15 @@ function findRoomForDoor(door: RectType, rooms: RectType[], type: string) {
 
 export default function EditView() {
     const { file, scaleFactor, roomCoords, doorCoords, windowCoords, setScaleFactor, setRoomCoords, setDoorCoords, setWindowCoords } = useCanvas();
-    const [rects, setRects] = useState<RectType[]>([]);
-    const { setZoneData } = useZone();
+    const [roomRects, setRoomRects] = useState<RoomRectType[]>([]);
+    const { zoneData, setZoneData } = useZone();
     const [image, setImage] = useState<HTMLImageElement | null>(null);
     const [move, setMove] = useState(false);
     const canvasRef = useRef<CanvasHandle>(null);
-    const [drawRect, setDrawRect] = useState<'none' | 'room' | 'door' | 'window'>('none')
+    const [drawRect, setDrawRect] = useState<'none' | 'room' | 'door' | 'window'>('none');
+    const ceilingHeightRef = useRef<HTMLInputElement>(null);
+    const windowHeightRef = useRef<HTMLInputElement>(null);
+    const doorHeightRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         (async () => {
@@ -113,42 +180,49 @@ export default function EditView() {
     }, [file]);
 
     useEffect(() => {
-        const roomsRect: RectType[] = [];
-        const doorsRect: RectType[] = [];
-        const windowsRect: RectType[] = [];
-        const rooms: Room[] = [];
+        const rooms: Map<string, Room> = new Map<string, Room>();
+        const windoors: Map<string, WinDoor> = new Map<string, WinDoor>();
+        const orphanRoomIds: string[] = [];
         if (roomCoords) roomCoords.forEach((room, index) => {
             const id = "R" + index;
             const display = "Room" + index;
-            const tempRoom = getRectFromCoords({ startPoint: [room.startPoint[0], room.startPoint[1]], endPoint: [room.endPoint[0], room.endPoint[1]], color: room.color }, id, display, 'room', scaleFactor)
-            rooms.push({ id: tempRoom.id, name: display, dimension: { length: { feet: tempRoom.width_ft, inch: 0 }, breadth: { feet: tempRoom.height_ft, inch: 0 } }, child: [], expanded: false, area: { feetSq: tempRoom.width_ft * tempRoom.height_ft, inchSq: 0 } });
-            roomsRect.push(tempRoom);
+            const tempRoom = getRoomFromCoords({ roomCoords: { startPoint: [room.startPoint[0], room.startPoint[1]], endPoint: [room.endPoint[0], room.endPoint[1]], color: room.color }, id, display, scaleFactor })
+            rooms.set(id, tempRoom)
+            orphanRoomIds.push(id);
+            // roomRects.push(tempRoom);
         })
         if (doorCoords) doorCoords.forEach((door, index) => {
             const id = "D" + index;
             const display = "Door" + index;
-            const tempDoor = getRectFromCoords({ startPoint: [door.startPoint[0], door.startPoint[1]], endPoint: [door.endPoint[0], door.endPoint[1]], color: door.color }, id, display, 'door', scaleFactor);
-            doorsRect.push(tempDoor);
-            const roomIndex = findRoomForDoor(tempDoor, roomsRect, 'door')
-            rooms[roomIndex].child?.push({ id: tempDoor.id, name: display, length: { feet: tempDoor.width_ft, inch: 0 }, type: "door" })
+            const tempDoor = getWinDoorFromCoords({ startPoint: [door.startPoint[0], door.startPoint[1]], endPoint: [door.endPoint[0], door.endPoint[1]], color: door.color }, id, display, 'door', scaleFactor);
+            const roomIndex = findRoomForWinDoor(tempDoor, orphanRoomIds, rooms)
+            const room = rooms.get(orphanRoomIds[roomIndex]);
+            if (!room) return;
+            room.children = [...room.children, id];
+            rooms.set(orphanRoomIds[roomIndex], room);
+            windoors.set(id, tempDoor)
         })
         if (windowCoords) windowCoords.forEach((window, index) => {
             const id = "W" + index;
             const display = "Window" + index;
-            const tempWindow = getRectFromCoords({ startPoint: [window.startPoint[0], window.startPoint[1]], endPoint: [window.endPoint[0], window.endPoint[1]], color: window.color }, id, display, 'window', scaleFactor)
-            windowsRect.push(tempWindow);
-            const roomIndex = findRoomForDoor(tempWindow, roomsRect, 'window')
-            rooms[roomIndex].child?.push({ id: tempWindow.id, name: display, length: { feet: tempWindow.width_ft, inch: 0 }, type: "window" })
+            const tempWindow = getWinDoorFromCoords({ startPoint: [window.startPoint[0], window.startPoint[1]], endPoint: [window.endPoint[0], window.endPoint[1]], color: window.color }, id, display, 'window', scaleFactor)
+            const roomIndex = findRoomForWinDoor(tempWindow, orphanRoomIds, rooms)
+            const room = rooms.get(orphanRoomIds[roomIndex]);
+            if (!room) return;
+            room.children = [...room.children, id];
+            rooms.set(orphanRoomIds[roomIndex], room);
+            windoors.set(id, tempWindow)
         })
-
-        const sortedRects = [...roomsRect, ...doorsRect, ...windowsRect].sort((a, b) => {
+        const sortedRects = [...orphanRoomIds].sort((a, b) => {
+            const roomA = rooms.get(a);
+            const roomB = rooms.get(b);
+            if (!roomA || !roomB) return 0;
             // Smaller rectangles on top
-            const aSize = Math.abs(a.width) * Math.abs(a.height);
-            const bSize = Math.abs(b.width) * Math.abs(b.height);
+            const aSize = Math.abs(roomA.pos.length) * Math.abs(roomA.pos.breadth);
+            const bSize = Math.abs(roomB.pos.length) * Math.abs(roomB.pos.breadth);
             return bSize - aSize;
         });
-        setRects(sortedRects);
-        setZoneData({ zones: [], rooms: rooms })
+        setZoneData({ zones: [], orphanRoomIds: orphanRoomIds, rooms: rooms, windoors: windoors })
     }, [scaleFactor, roomCoords, doorCoords, windowCoords])
 
     const reRunDetection = async () => {
@@ -165,6 +239,55 @@ export default function EditView() {
             setDoorCoords(resp.doorCoords);
             setWindowCoords(resp.windowsCoords);
         });
+    }
+
+    const toggleDraw = (type: 'door' | 'window' | 'room') => {
+        if (drawRect == 'none') {
+            setDrawRect(type)
+            setMove(false)
+        }
+        else if (drawRect == type) {
+            setDrawRect('none')
+        }
+        else {
+            setDrawRect(type);
+        }
+    }
+
+    const handleApplyAll = () => {
+
+        const ceilingRef = ceilingHeightRef.current
+        const windowRef = windowHeightRef.current
+        const doorRef = doorHeightRef.current
+        if (!ceilingRef || !windowRef || !doorRef) return;
+
+        const ceilingHeight = ceilingRef.value.trim();
+        const windowHeight = windowRef.value.trim();
+        const doorHeight = doorRef.value.trim();
+
+        if (!ceilingHeight && !windowHeight && !doorHeight) return
+        setZoneData(zoneData => {
+            let updatedWindoors = new Map(zoneData.windoors);
+            let updatedRooms = new Map(zoneData.rooms);
+
+            if (ceilingHeight) {
+                for (const [id, room] of updatedRooms.entries()) {
+                    updatedRooms.set(id, { ...room, dimension: { ...room.dimension, ceilingHeight_ft: parseFloat(ceilingHeight) } });
+                }
+            }
+            if (windowHeight || doorHeight) {
+                for (const [id, room] of updatedWindoors.entries()) {
+                    if (windowHeight && room.type === 'window') updatedWindoors.set(id, { ...room, dimension: { ...room.dimension, height_ft: parseFloat(windowHeight) } });
+                    if (doorHeight && room.type === 'door') updatedWindoors.set(id, { ...room, dimension: { ...room.dimension, height_ft: parseFloat(doorHeight) } });
+                }
+            }
+            return {
+                ...zoneData, rooms: updatedRooms, windoors: updatedWindoors
+            };
+        })
+        ceilingRef.value = "";
+        windowRef.value = "";
+        doorRef.value = "";
     }
 
     return (
@@ -190,12 +313,12 @@ export default function EditView() {
                         <h4 className='mb-1 font-bold'>Tools</h4>
                         <p className='text-sm text-[#873efd] font-figtree mb-3 font-medium'>Tip: Zoom in to increase accuary when drawing the scale line.</p>
                         <div className="flex gap-3 items-center">
-                            <button className='flex items-center justify-center bg-[#421C7F] px-3 py-1.5 rounded-md cursor-pointer'
+                            <button className='flex items-center justify-center bg-[#35333A] active:bg-[#421C7F] px-3 py-1.5 rounded-md cursor-pointer'
                                 onClick={() => canvasRef.current?.zoomStage("in", 1.1)}
                             >
                                 <ZoomInIcon size={20} />
                             </button>
-                            <button className='flex items-center justify-center bg-[#421C7F] px-3 py-1.5 rounded-md cursor-pointer'
+                            <button className='flex items-center justify-center bg-[#35333A] active:bg-[#421C7F] px-3 py-1.5 rounded-md cursor-pointer'
                                 onClick={() => canvasRef.current?.zoomStage("out", 1.1)}
                             >
                                 <ZoomOutIcon size={20} />
@@ -216,27 +339,27 @@ export default function EditView() {
                     </div>
                 </div>
                 <div className='w-[650px] h-[650px]'>
-                    <Canvas ref={canvasRef} move={move} image={image} stageSize={{ width: 650, height: 650 }} setInputModelOpen={null} setPixelDist={null} drawRect={drawRect} rects={rects} setRects={setRects} />
+                    <Canvas ref={canvasRef} move={move} image={image} stageSize={{ width: 650, height: 650 }} setInputModelOpen={null} setPixelDist={null} drawRect={drawRect} />
                 </div>
                 <div className='p-6 bg-[#292730] rounded-xl'>
                     <h4 className='mb-3 font-bold'>Drawing Tools</h4>
                     <p className='text-sm text-[#873efd] font-figtree mb-3 wrap-break-word font-medium'>Choose a pencil according to the type of object you want to point out in the image for the auto scale.</p>
                     <div className="flex gap-3 items-center w-full justify-between">
                         <button className={`flex items-center justify-center ${drawRect == 'room' ? "bg-[#421C7F]" : "bg-[#35333A]"}  px-5 py-2 gap-2 rounded-md cursor-pointer`}
-                            onClick={() => setDrawRect((drawRect) => drawRect == 'room' ? 'none' : 'room')}
+                            onClick={() => toggleDraw('room')}
                         >
                             <DoorOpen size={20} />
                             <span className="leading-none mt-0 text-sm">Draw Room</span>
 
                         </button>
                         <button className={`flex items-center justify-center ${drawRect == 'window' ? "bg-[#421C7F]" : "bg-[#35333A]"}   text-[#E7E6E9] px-5 py-2 rounded-md gap-2 cursor-pointer`}
-                            onClick={() => setDrawRect((drawRect) => drawRect == 'window' ? 'none' : 'window')}
+                            onClick={() => toggleDraw('window')}
                         >
-                            <NextImage src={'./window-frame.svg'} alt='logo' width={14} height={14} className='w-auto h-auto' />
+                            <NextImage src={'./window-frame.svg'} alt='logo' width={14} height={14} className='w-[14px] h-[14px]' />
                             <span className="leading-none mt-0 text-sm">Draw Window</span>
                         </button>
                         <button className={`flex items-center justify-center ${drawRect == 'door' ? "bg-[#421C7F]" : "bg-[#35333A]"}  text-[#E7E6E9] px-5 py-2 rounded-md gap-2 cursor-pointer`}
-                            onClick={() => setDrawRect((drawRect) => drawRect == 'door' ? 'none' : 'door')}
+                            onClick={() => toggleDraw('door')}
                         >
                             <DoorClosed size={20} />
                             <span className="leading-none mt-0 text-sm">Draw Door</span>
@@ -244,29 +367,70 @@ export default function EditView() {
                     </div>
                 </div>
                 <div className='p-6 bg-[#292730] rounded-xl w-full mt-4'>
-                    <div className='flex gap-8 mb-5'>
-                        <div className='w-full flex flex-col'>
-                            <h4 className='mb-3 font-bold'>Icee</h4>
-                            <select name="icee" id="icee"
-                                className='text-sm bg-[#313131] rounded-md px-3 py-2.5 focus:ring-0
-                             focus:border-[hsl(0,1%,54%)] focus:outline-0 [appearance:textfield] 
-                             [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none'>
-                                <option value="2018" className='bg-[#585656]'>2018</option>
-                                <option value="2019" className='bg-[#585656]'>2019</option>
-                                <option value="2020" className='bg-[#585656]'>2020</option>
-                                <option value="2021" className='bg-[#585656]'>2021</option>
-                            </select>
-                        </div>
-                        <div className='w-full flex flex-col'>
-                            <h4 className='mb-3 font-bold'>Ceiling Height</h4>
-                            <input type="number" name="height" id="height" placeholder='HEIGHT'
-                                className='bg-[#313131] rounded-md text-sm border-1 border-[#585656] px-3 py-2.5 focus:ring-0
+                    <div className='flex gap-8 mb-5 flex-col'>
+                        <div className='flex items-center gap-4'>
+                            <div className='flex flex-col'>
+                                <h4 className='mb-3 font-bold'>Ceiling Height</h4>
+                                <input ref={ceilingHeightRef} type="number" name="ceiling-height" id="ceiling-height" placeholder='HEIGHT'
+                                    className='w-full bg-[#313131] rounded-md text-sm border-1 border-[#585656] px-3 py-2.5 focus:ring-0
                              focus:border-[hsl(0,1%,54%)] focus:outline-0 [appearance:textfield] 
                              [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none'/>
+                            </div>
+                            <div className='flex flex-col'>
+                                <h4 className='mb-3 font-bold'>Window Height</h4>
+                                <input ref={windowHeightRef} type="number" name="window-height" id="window-height" placeholder='HEIGHT'
+                                    className='w-full bg-[#313131] rounded-md text-sm border-1 border-[#585656] px-3 py-2.5 focus:ring-0
+                             focus:border-[hsl(0,1%,54%)] focus:outline-0 [appearance:textfield] 
+                             [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none'/>
+                            </div>
+                            <div className='flex flex-col'>
+                                <h4 className='mb-3 font-bold'>Door Height</h4>
+                                <input ref={doorHeightRef} type="number" name="door-height" id="door-height" placeholder='HEIGHT'
+                                    className='w-full bg-[#313131] rounded-md text-sm border-1 border-[#585656] px-3 py-2.5 focus:ring-0
+                             focus:border-[hsl(0,1%,54%)] focus:outline-0 [appearance:textfield] 
+                             [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none'/>
+                            </div>
+                        </div>
+                        <div className='flex items-center gap-4 justify-stretch'>
+                            <div className='grow flex flex-col'>
+                                <h4 className='mb-3 font-bold'>Ceiling Type</h4>
+                                <select name="icee" id="icee"
+                                    className='text-sm bg-[#313131] rounded-md px-3 py-2.5 focus:ring-0
+                             focus:border-[hsl(0,1%,54%)] focus:outline-0 [appearance:textfield] 
+                             [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none'>
+                                    <option value="2018" className='bg-[#585656]'>2018</option>
+                                    <option value="2019" className='bg-[#585656]'>2019</option>
+                                    <option value="2020" className='bg-[#585656]'>2020</option>
+                                    <option value="2021" className='bg-[#585656]'>2021</option>
+                                </select>
+                            </div>
+                            <div className='grow flex flex-col'>
+                                <h4 className='mb-3 font-bold'>Wall Type</h4>
+                                <select name="icee" id="icee"
+                                    className='text-sm bg-[#313131] rounded-md px-3 py-2.5 focus:ring-0
+                             focus:border-[hsl(0,1%,54%)] focus:outline-0 [appearance:textfield] 
+                             [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none'>
+                                    <option value="2018" className='bg-[#585656]'>2018</option>
+                                    <option value="2019" className='bg-[#585656]'>2019</option>
+                                    <option value="2020" className='bg-[#585656]'>2020</option>
+                                    <option value="2021" className='bg-[#585656]'>2021</option>
+                                </select>
+                            </div>
+                            <div className='grow flex flex-col'>
+                                <h4 className='mb-3 font-bold'>Icee</h4>
+                                <select name="icee" id="icee"
+                                    className='text-sm bg-[#313131] rounded-md px-3 py-2.5 focus:ring-0
+                             focus:border-[hsl(0,1%,54%)] focus:outline-0 [appearance:textfield] 
+                             [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none'>
+                                    <option value="2018" className='bg-[#585656]'>2018</option>
+                                    <option value="2019" className='bg-[#585656]'>2019</option>
+                                    <option value="2020" className='bg-[#585656]'>2020</option>
+                                    <option value="2021" className='bg-[#585656]'>2021</option>
+                                </select>
+                            </div>
                         </div>
                     </div>
-                    <button className='fonts-sans font-medium py-3 bg-[#421c7f] rounded-md w-full hover:bg-[#6c2ed1] transition cursor-pointer'>CALCULATE</button>
-
+                    <button className='fonts-sans font-medium py-3 bg-[#421c7f] rounded-md w-full hover:bg-[#6c2ed1] transition cursor-pointer' onClick={handleApplyAll}>Apply to All</button>
                 </div>
             </div>
         </div>

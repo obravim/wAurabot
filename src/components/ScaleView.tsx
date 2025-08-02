@@ -82,15 +82,15 @@ function ScaleView() {
     };
 
     const handleApply = async () => {
-        
+
         if (!result || pixelDist == 0) {
             alert("Draw a line over a known-length object to manually scale.")
             return;
         }
 
-        const {feet,inch} = result;
-        const totalInch = feet*12 + inch;
-        const scaleFactor = totalInch/pixelDist
+        const { feet, inch } = result;
+        const totalInch = feet * 12 + inch;
+        const scaleFactor = totalInch / pixelDist
 
         fetch('/api/detect', {
             method: 'POST',
@@ -148,11 +148,11 @@ function ScaleView() {
                     <div className='p-4 bg-[#292730] rounded-xl'>
                         <h4 className='mb-4 font-bold'>Tools</h4>
                         <div className="flex gap-3 items-center">
-                            <button className='flex items-center justify-center bg-[#421C7F] px-3 py-1.5 rounded-md cursor-pointer'
+                            <button className='flex items-center justify-center bg-[#35333A] active:bg-[#421C7F] px-3 py-1.5 rounded-md cursor-pointer'
                                 onClick={() => canvasRef.current?.zoomStage("in", 1.1)}>
                                 <ZoomInIcon size={20} />
                             </button>
-                            <button className='flex items-center justify-center bg-[#421C7F] px-3 py-1.5 rounded-md cursor-pointer'
+                            <button className='flex items-center justify-center bg-[#35333A] active:bg-[#421C7F] px-3 py-1.5 rounded-md cursor-pointer'
                                 onClick={() => canvasRef.current?.zoomStage("out", 1.1)}>
                                 <ZoomOutIcon size={20} />
                             </button>
@@ -171,7 +171,7 @@ function ScaleView() {
                 </div>
                 {/* canvas section */}
                 <div className='w-[800px] rounded-2xl h-[800px]  mt-6 overflow-hidden flex items-center justify-center bg-[#6b6775]'>
-                    <Canvas image={image} ref={canvasRef} move={move} setInputModelOpen={setinputModelOpen} setPixelDist={setpixelDist} stageSize={{ width: 800, height: 800 }} drawRect='none' rects={[]} setRects={()=>{}}/>
+                    <Canvas image={image} ref={canvasRef} move={move} setInputModelOpen={setinputModelOpen} setPixelDist={setpixelDist} stageSize={{ width: 800, height: 800 }} drawRect='none' />
                 </div>
                 <p className='text-center font-figtree'>
                     Once you&#39;ve defined a known-length reference, click <span className='text-[#873EFD]'>Apply Scale</span> to begin detection.
