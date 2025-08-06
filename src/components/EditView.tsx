@@ -8,6 +8,7 @@ import Canvas, { CanvasHandle, RectCoord } from './Canvas';
 
 const DEFAULT_CEILING_HEIGHT_FT = 10;
 const DEFAULT_WINDOW_HEIGHT_FT = 5;
+export const DEFAULT_WINDOW_BREADTH = 10;
 const DEFAULT_DOOR_HEIGHT_FT = 8;
 
 export type RoomRectType = {
@@ -66,7 +67,7 @@ function fileToImage(file: File | null): Promise<HTMLImageElement> {
     });
 }
 
-function getWinDoorFromCoords(rectCoords: RectCoord, id: string, display: string, type: 'door' | 'window', scaleFactor: number) {
+export function getWinDoorFromCoords(rectCoords: RectCoord, id: string, display: string, type: 'door' | 'window', scaleFactor: number) {
     const [x1, y1] = rectCoords.startPoint;
     const [x2, y2] = rectCoords.endPoint;
     const x = Math.min(x1, x2);
@@ -108,7 +109,8 @@ export function getRoomFromCoords({ roomCoords, id, display, scaleFactor, select
             ceilingHeight_ft
         },
         children: [],
-        expanded: false
+        expanded: false,
+        zoneColor: null
     }
 }
 
@@ -130,6 +132,20 @@ export function forEachRoom(zoneData: ZoneData, callback: (room: Room) => void) 
     }
 }
 
+export function isItNear(point: { x: number, y: number }, room: Room) {
+    const proximity = 20;
+    let [x1, y1, x2, y2] = [room.pos.x, room.pos.y, room.pos.x + room.pos.length, room.pos.y + room.pos.breadth]
+    if (point.x >= x1 && point.x <= x2 && Math.abs(point.y - y1) < proximity) {
+        return true;
+    } else if (point.x >= x1 && point.x <= x2 && Math.abs(point.y - y2) < proximity) {
+        return true;
+    } else if (point.y >= y1 && point.y <= y2 && Math.abs(point.x - x1) < proximity) {
+        return true;
+    } else if (point.y >= y1 && point.y <= y2 && Math.abs(point.x - x2) < proximity) {
+        return true;
+    }
+    return false;
+}
 
 function findRoomForWinDoor(door: WinDoor, roomIds: string[], rooms: Map<string, Room>) {
     const doorCenterX = door.pos.x + door.pos.length / 2;
@@ -142,23 +158,13 @@ function findRoomForWinDoor(door: WinDoor, roomIds: string[], rooms: Map<string,
         const room = rooms.get(roomIds[i]);
         if (!room) continue;
         //wall1
-        let [x1, y1, x2, y2] = [room.pos.x, room.pos.y, room.pos.x + room.pos.length, room.pos.y + room.pos.breadth]
-        if (doorCenterX >= x1 && doorCenterX <= x2 && Math.abs(doorCenterY - y1) < proximity) {
-            return i;
-        } else if (doorCenterX >= x1 && doorCenterX <= x2 && Math.abs(doorCenterY - y2) < proximity) {
-            return i;
-        } else if (doorCenterY >= y1 && doorCenterY <= y2 && Math.abs(doorCenterX - x1) < proximity) {
-            return i;
-        } else if (doorCenterY >= y1 && doorCenterY <= y2 && Math.abs(doorCenterX - x2) < proximity) {
-            return i;
-        }
+        if (isItNear({ x: doorCenterX, y: doorCenterY }, room)) return i
     }
     return i - 1;
 }
 
 export default function EditView() {
-    const { file, scaleFactor, roomCoords, doorCoords, windowCoords, setScaleFactor, setRoomCoords, setDoorCoords, setWindowCoords } = useCanvas();
-    const [roomRects, setRoomRects] = useState<RoomRectType[]>([]);
+    const { file, scaleFactor, roomCoords, doorCoords, windowCoords, setScaleFactor, setRoomCoords, setDoorCoords, setWindowCoords } = useCanvas()
     const { zoneData, setZoneData } = useZone();
     const [image, setImage] = useState<HTMLImageElement | null>(null);
     const [move, setMove] = useState(false);
@@ -184,16 +190,15 @@ export default function EditView() {
         const windoors: Map<string, WinDoor> = new Map<string, WinDoor>();
         const orphanRoomIds: string[] = [];
         if (roomCoords) roomCoords.forEach((room, index) => {
-            const id = "R" + index;
-            const display = "Room" + index;
+            const id = "R" + (index + 1);
+            const display = "Room" + (index + 1);
             const tempRoom = getRoomFromCoords({ roomCoords: { startPoint: [room.startPoint[0], room.startPoint[1]], endPoint: [room.endPoint[0], room.endPoint[1]], color: room.color }, id, display, scaleFactor })
             rooms.set(id, tempRoom)
             orphanRoomIds.push(id);
-            // roomRects.push(tempRoom);
         })
         if (doorCoords) doorCoords.forEach((door, index) => {
-            const id = "D" + index;
-            const display = "Door" + index;
+            const id = "D" + (index + 1);
+            const display = "Door" + (index + 1);
             const tempDoor = getWinDoorFromCoords({ startPoint: [door.startPoint[0], door.startPoint[1]], endPoint: [door.endPoint[0], door.endPoint[1]], color: door.color }, id, display, 'door', scaleFactor);
             const roomIndex = findRoomForWinDoor(tempDoor, orphanRoomIds, rooms)
             const room = rooms.get(orphanRoomIds[roomIndex]);
@@ -203,8 +208,8 @@ export default function EditView() {
             windoors.set(id, tempDoor)
         })
         if (windowCoords) windowCoords.forEach((window, index) => {
-            const id = "W" + index;
-            const display = "Window" + index;
+            const id = "W" + (index + 1);
+            const display = "Window" + (index + 1);
             const tempWindow = getWinDoorFromCoords({ startPoint: [window.startPoint[0], window.startPoint[1]], endPoint: [window.endPoint[0], window.endPoint[1]], color: window.color }, id, display, 'window', scaleFactor)
             const roomIndex = findRoomForWinDoor(tempWindow, orphanRoomIds, rooms)
             const room = rooms.get(orphanRoomIds[roomIndex]);
@@ -213,15 +218,6 @@ export default function EditView() {
             rooms.set(orphanRoomIds[roomIndex], room);
             windoors.set(id, tempWindow)
         })
-        const sortedRects = [...orphanRoomIds].sort((a, b) => {
-            const roomA = rooms.get(a);
-            const roomB = rooms.get(b);
-            if (!roomA || !roomB) return 0;
-            // Smaller rectangles on top
-            const aSize = Math.abs(roomA.pos.length) * Math.abs(roomA.pos.breadth);
-            const bSize = Math.abs(roomB.pos.length) * Math.abs(roomB.pos.breadth);
-            return bSize - aSize;
-        });
         setZoneData({ zones: [], orphanRoomIds: orphanRoomIds, rooms: rooms, windoors: windoors })
     }, [scaleFactor, roomCoords, doorCoords, windowCoords])
 
@@ -339,7 +335,7 @@ export default function EditView() {
                     </div>
                 </div>
                 <div className='w-[650px] h-[650px]'>
-                    <Canvas ref={canvasRef} move={move} image={image} stageSize={{ width: 650, height: 650 }} setInputModelOpen={null} setPixelDist={null} drawRect={drawRect} />
+                    <Canvas ref={canvasRef} move={move} image={image} stageSize={{ width: 650, height: 650 }} setInputModelOpen={null} setPixelDist={null} drawRect={drawRect} setDrawRect={setDrawRect} />
                 </div>
                 <div className='p-6 bg-[#292730] rounded-xl'>
                     <h4 className='mb-3 font-bold'>Drawing Tools</h4>

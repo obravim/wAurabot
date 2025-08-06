@@ -171,7 +171,7 @@ function ScaleView() {
                 </div>
                 {/* canvas section */}
                 <div className='w-[800px] rounded-2xl h-[800px]  mt-6 overflow-hidden flex items-center justify-center bg-[#6b6775]'>
-                    <Canvas image={image} ref={canvasRef} move={move} setInputModelOpen={setinputModelOpen} setPixelDist={setpixelDist} stageSize={{ width: 800, height: 800 }} drawRect='none' />
+                    <Canvas image={image} ref={canvasRef} move={move} setInputModelOpen={setinputModelOpen} setPixelDist={setpixelDist} stageSize={{ width: 800, height: 800 }} drawRect='none' setDrawRect={() => { }} />
                 </div>
                 <p className='text-center font-figtree'>
                     Once you&#39;ve defined a known-length reference, click <span className='text-[#873EFD]'>Apply Scale</span> to begin detection.

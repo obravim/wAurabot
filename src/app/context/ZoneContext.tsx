@@ -16,6 +16,7 @@ export type Room = {
     name: string,
     pos: { x: number, y: number, length: number, breadth: number }
     stroke: string,
+    zoneColor: string | null,
     selected: boolean,
     zone: string | null,
     dimension: { length_ft: number, breadth_ft: number, ceilingHeight_ft: number },
