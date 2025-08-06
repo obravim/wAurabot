@@ -148,8 +148,7 @@ export default function EditZone() {
                     ...prev,
                     zones: updatedZones,
                 };
-            }
-            else if (data.isRoom) {
+            } else if (data.isRoom) {
                 const updatedRooms = new Map(prev.rooms);
                 const room = updatedRooms.get(data.itemId);
                 if (!room) return prev;
@@ -393,8 +392,6 @@ export default function EditZone() {
                         }} />
                     }
                 </div>
-
-
                 <div className='bg-[#1F1F1F] rounded-lg p-4 flex flex-col gap-4 items-stretch'>
                     <div className='flex gap-2 items-center'>
                         <Image src={"/drag.svg"} alt="move item" width={16} height={16} />

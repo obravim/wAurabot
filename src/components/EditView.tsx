@@ -9,6 +9,7 @@ import Canvas, { CanvasHandle, RectCoord } from './Canvas';
 const DEFAULT_CEILING_HEIGHT_FT = 10;
 const DEFAULT_WINDOW_HEIGHT_FT = 5;
 export const DEFAULT_WINDOW_BREADTH = 10;
+export const MAX_DOOR_SIZE = 50;
 const DEFAULT_DOOR_HEIGHT_FT = 8;
 
 export type RoomRectType = {
@@ -132,8 +133,7 @@ export function forEachRoom(zoneData: ZoneData, callback: (room: Room) => void) 
     }
 }
 
-export function isItNear(point: { x: number, y: number }, room: Room) {
-    const proximity = 20;
+export function isItNear(point: { x: number, y: number }, room: Room, proximity: number) {
     let [x1, y1, x2, y2] = [room.pos.x, room.pos.y, room.pos.x + room.pos.length, room.pos.y + room.pos.breadth]
     if (point.x >= x1 && point.x <= x2 && Math.abs(point.y - y1) < proximity) {
         return true;
@@ -158,7 +158,7 @@ function findRoomForWinDoor(door: WinDoor, roomIds: string[], rooms: Map<string,
         const room = rooms.get(roomIds[i]);
         if (!room) continue;
         //wall1
-        if (isItNear({ x: doorCenterX, y: doorCenterY }, room)) return i
+        if (isItNear({ x: doorCenterX, y: doorCenterY }, room, proximity)) return i
     }
     return i - 1;
 }

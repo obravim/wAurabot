@@ -41,14 +41,14 @@ export default function EditModel({ data, open, onClose, onSave }: EditModelProp
             (!data.isRoom || (data.isRoom && breadthValue && breadthValue.length > 0)) &&
             heightValue && heightValue.length > 0 &&
             nameValue && nameValue.length > 0) {
-            const length = parseInt(lengthValue)
-            const breadthInt = data.isRoom && breadthValue ? parseInt(breadthValue) : 0
-            const height = parseInt(heightValue)
+            const length = parseFloat(lengthValue)
+            const breadthVal = data.isRoom && breadthValue ? parseFloat(breadthValue) : 0
+            const height = parseFloat(heightValue)
             if (!nameValue.match(NAME_REGEX)) {
                 alert("Only Alphabets, digits, -, _ and space are allowed.");
                 return;
             }
-            onSave({ ...data, length, breadth: breadthInt, height, name: nameValue })
+            onSave({ ...data, length, breadth: breadthVal, height, name: nameValue })
         }
         else {
             return;

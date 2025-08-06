@@ -10,12 +10,12 @@ function UploadView() {
     const { setStep } = useStep();
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            setCanvasFile(e.target.files[0]);
+        if (!(e.target.files && e.target.files[0])) {
+            return
         }
 
         const formData = new FormData();
-        formData.append('image', file as Blob);
+        formData.append('image', e.target.files[0] as Blob);
 
         fetch('/api/scale', {
             method: 'POST',
@@ -28,7 +28,7 @@ function UploadView() {
             setWindowCoords(resp.windowsCoords);
             setStep(1);
         });
-
+        setCanvasFile(e.target.files[0]);
         // const data = await res.json();
         // console.log(data);
     };
