@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 
-
+export const NAME_REGEX = /^[\w\d-_ ]+$/i
 
 export type EditModelDataType = {
     itemId: string,
@@ -38,12 +38,16 @@ export default function EditModel({ data, open, onClose, onSave }: EditModelProp
         }
 
         if (lengthValue && lengthValue.length > 0 &&
-            (!data.isRoom || data.isRoom && breadthValue && breadthValue.length > 0) &&
+            (!data.isRoom || (data.isRoom && breadthValue && breadthValue.length > 0)) &&
             heightValue && heightValue.length > 0 &&
             nameValue && nameValue.length > 0) {
             const length = parseInt(lengthValue)
             const breadthInt = data.isRoom && breadthValue ? parseInt(breadthValue) : 0
             const height = parseInt(heightValue)
+            if (!nameValue.match(NAME_REGEX)) {
+                alert("Only Alphabets, digits, -, _ and space are allowed.");
+                return;
+            }
             onSave({ ...data, length, breadth: breadthInt, height, name: nameValue })
         }
         else {
