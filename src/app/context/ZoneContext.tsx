@@ -8,7 +8,8 @@ export type WinDoor = {
     pos: { x: number, y: number, length: number, breadth: number },
     dimension: { length_ft: number, height_ft: number }
     stroke: string,
-    horizontal: boolean
+    horizontal: boolean,
+    roomId: string,
 }
 
 export type Room = {

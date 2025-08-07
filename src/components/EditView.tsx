@@ -5,12 +5,25 @@ import { useCanvas } from '@/app/context/CanvasContext'
 import { useZone, Room, WinDoor, Zone, ZoneData } from '@/app/context/ZoneContext'
 import Compass from './Compass';
 import Canvas, { CanvasHandle, RectCoord } from './Canvas';
+import WindowFrame from './Icons/WindowFrame'
 
 const DEFAULT_CEILING_HEIGHT_FT = 10;
 const DEFAULT_WINDOW_HEIGHT_FT = 5;
 export const DEFAULT_WINDOW_BREADTH = 10;
 export const MAX_DOOR_SIZE = 50;
 const DEFAULT_DOOR_HEIGHT_FT = 8;
+export const ROOM_COLORS = [
+    "#FF5733", // Bright Red-Orange
+    "#FFC300", // Bright Yellow
+    "#DAF7A6", // Light Lime
+    "#33FFBD", // Bright Aqua
+    "#33C1FF", // Bright Sky Blue
+    "#A633FF", // Bright Purple
+    "#FF33EC", // Neon Pink
+    "#FF3333", // Bright Red
+    "#75FF33", // Bright Green
+    "#FF9900"  // Vivid Orange
+];
 
 export type RoomRectType = {
     id: string;
@@ -68,7 +81,7 @@ function fileToImage(file: File | null): Promise<HTMLImageElement> {
     });
 }
 
-export function getWinDoorFromCoords(rectCoords: RectCoord, id: string, display: string, type: 'door' | 'window', scaleFactor: number) {
+export function getWinDoorFromCoords(rectCoords: RectCoord, id: string, display: string, type: 'door' | 'window', scaleFactor: number, resizeFactor: number) {
     const [x1, y1] = rectCoords.startPoint;
     const [x2, y2] = rectCoords.endPoint;
     const x = Math.min(x1, x2);
@@ -76,26 +89,27 @@ export function getWinDoorFromCoords(rectCoords: RectCoord, id: string, display:
     const length = Math.abs(x2 - x1);
     const breadth = Math.abs(y2 - y1);
     const horizontal = length > breadth;
-    const length_ft = Math.abs(horizontal ? length : breadth) * scaleFactor / 12;
+    const length_ft = Math.abs(horizontal ? length : breadth) * scaleFactor * resizeFactor / 12;
     const height_ft = type === 'door' ? DEFAULT_DOOR_HEIGHT_FT : DEFAULT_WINDOW_HEIGHT_FT;
     return {
         id, name: display, type,
         pos: { x, y, length, breadth },
         stroke: rectCoords.color,
         dimension: { length_ft, height_ft },
-        horizontal
+        horizontal,
+        roomId: ""
     }
 }
 
-export function getRoomFromCoords({ roomCoords, id, display, scaleFactor, selected = false }: { roomCoords: RectCoord, id: string, display: string, scaleFactor: number, selected?: boolean }) {
+export function getRoomFromCoords({ roomCoords, id, display, scaleFactor, resizeFactor, selected = false }: { roomCoords: RectCoord, id: string, display: string, scaleFactor: number, resizeFactor: number, selected?: boolean }) {
     const [x1, y1] = roomCoords.startPoint;
     const [x2, y2] = roomCoords.endPoint;
     const x = Math.min(x1, x2);
     const y = Math.min(y1, y2);
     const length = Math.abs(x2 - x1);
     const breadth = Math.abs(y2 - y1);
-    let length_ft = Math.abs(x2 - x1) * scaleFactor / 12;
-    let breadth_ft = Math.abs(y2 - y1) * scaleFactor / 12;
+    let length_ft = Math.abs(x2 - x1) * scaleFactor * resizeFactor / 12;
+    let breadth_ft = Math.abs(y2 - y1) * scaleFactor * resizeFactor / 12;
     let ceilingHeight_ft = DEFAULT_CEILING_HEIGHT_FT;
     return {
         id,
@@ -136,18 +150,22 @@ export function forEachRoom(zoneData: ZoneData, callback: (room: Room) => void) 
 export function isItNear(point: { x: number, y: number }, room: Room, proximity: number) {
     let [x1, y1, x2, y2] = [room.pos.x, room.pos.y, room.pos.x + room.pos.length, room.pos.y + room.pos.breadth]
     if (point.x >= x1 && point.x <= x2 && Math.abs(point.y - y1) < proximity) {
-        return true;
+        //top-horizontal
+        return 'h';
     } else if (point.x >= x1 && point.x <= x2 && Math.abs(point.y - y2) < proximity) {
-        return true;
+        //bottom-horizontal
+        return 'h';
     } else if (point.y >= y1 && point.y <= y2 && Math.abs(point.x - x1) < proximity) {
-        return true;
+        //left-vertical
+        return 'v';
     } else if (point.y >= y1 && point.y <= y2 && Math.abs(point.x - x2) < proximity) {
-        return true;
+        //right-vertical
+        return 'v';
     }
-    return false;
+    return null;
 }
 
-function findRoomForWinDoor(door: WinDoor, roomIds: string[], rooms: Map<string, Room>) {
+function findRoomForWinDoor(door: WinDoor, roomIds: string[], rooms: Map<string, Room>): { horizontal: boolean, roomIndex: number } {
     const doorCenterX = door.pos.x + door.pos.length / 2;
     const doorCenterY = door.pos.y + door.pos.breadth / 2;
     let proximity = 20;
@@ -158,13 +176,16 @@ function findRoomForWinDoor(door: WinDoor, roomIds: string[], rooms: Map<string,
         const room = rooms.get(roomIds[i]);
         if (!room) continue;
         //wall1
-        if (isItNear({ x: doorCenterX, y: doorCenterY }, room, proximity)) return i
+        const wall = isItNear({ x: doorCenterX, y: doorCenterY }, room, proximity)
+        if (wall != null) {
+            return { horizontal: wall == 'h', roomIndex: i }
+        }
     }
-    return i - 1;
+    return { horizontal: door.pos.length > door.pos.breadth, roomIndex: i - 1 };
 }
 
 export default function EditView() {
-    const { file, scaleFactor, roomCoords, doorCoords, windowCoords, setScaleFactor, setRoomCoords, setDoorCoords, setWindowCoords } = useCanvas()
+    const { file, resizeFactor, scaleFactor, roomCoords, doorCoords, windowCoords, setScaleFactor, setRoomCoords, setDoorCoords, setWindowCoords } = useCanvas()
     const { zoneData, setZoneData } = useZone();
     const [image, setImage] = useState<HTMLImageElement | null>(null);
     const [move, setMove] = useState(false);
@@ -173,6 +194,7 @@ export default function EditView() {
     const ceilingHeightRef = useRef<HTMLInputElement>(null);
     const windowHeightRef = useRef<HTMLInputElement>(null);
     const doorHeightRef = useRef<HTMLInputElement>(null);
+    const [drawWindoorEnabled, setDrawWindoorEnabled] = useState<boolean>(false)
 
     useEffect(() => {
         (async () => {
@@ -192,17 +214,19 @@ export default function EditView() {
         if (roomCoords) roomCoords.forEach((room, index) => {
             const id = "R" + (index + 1);
             const display = "Room" + (index + 1);
-            const tempRoom = getRoomFromCoords({ roomCoords: { startPoint: [room.startPoint[0], room.startPoint[1]], endPoint: [room.endPoint[0], room.endPoint[1]], color: room.color }, id, display, scaleFactor })
+            const tempRoom = getRoomFromCoords({ roomCoords: { startPoint: [room.startPoint[0], room.startPoint[1]], endPoint: [room.endPoint[0], room.endPoint[1]], color: room.color }, id, display, scaleFactor, resizeFactor })
             rooms.set(id, tempRoom)
             orphanRoomIds.push(id);
         })
         if (doorCoords) doorCoords.forEach((door, index) => {
             const id = "D" + (index + 1);
             const display = "Door" + (index + 1);
-            const tempDoor = getWinDoorFromCoords({ startPoint: [door.startPoint[0], door.startPoint[1]], endPoint: [door.endPoint[0], door.endPoint[1]], color: door.color }, id, display, 'door', scaleFactor);
-            const roomIndex = findRoomForWinDoor(tempDoor, orphanRoomIds, rooms)
+            const tempDoor = getWinDoorFromCoords({ startPoint: [door.startPoint[0], door.startPoint[1]], endPoint: [door.endPoint[0], door.endPoint[1]], color: door.color }, id, display, 'door', scaleFactor, resizeFactor);
+            const { horizontal, roomIndex } = findRoomForWinDoor(tempDoor, orphanRoomIds, rooms)
+            tempDoor.horizontal = horizontal
             const room = rooms.get(orphanRoomIds[roomIndex]);
             if (!room) return;
+            tempDoor.roomId = room.id
             room.children = [...room.children, id];
             rooms.set(orphanRoomIds[roomIndex], room);
             windoors.set(id, tempDoor)
@@ -210,16 +234,18 @@ export default function EditView() {
         if (windowCoords) windowCoords.forEach((window, index) => {
             const id = "W" + (index + 1);
             const display = "Window" + (index + 1);
-            const tempWindow = getWinDoorFromCoords({ startPoint: [window.startPoint[0], window.startPoint[1]], endPoint: [window.endPoint[0], window.endPoint[1]], color: window.color }, id, display, 'window', scaleFactor)
-            const roomIndex = findRoomForWinDoor(tempWindow, orphanRoomIds, rooms)
+            const tempWindow = getWinDoorFromCoords({ startPoint: [window.startPoint[0], window.startPoint[1]], endPoint: [window.endPoint[0], window.endPoint[1]], color: window.color }, id, display, 'window', scaleFactor,resizeFactor)
+            const { horizontal, roomIndex } = findRoomForWinDoor(tempWindow, orphanRoomIds, rooms)
+            tempWindow.horizontal = horizontal
             const room = rooms.get(orphanRoomIds[roomIndex]);
             if (!room) return;
+            tempWindow.roomId = room.id
             room.children = [...room.children, id];
             rooms.set(orphanRoomIds[roomIndex], room);
             windoors.set(id, tempWindow)
         })
         setZoneData({ zones: [], orphanRoomIds: orphanRoomIds, rooms: rooms, windoors: windoors })
-    }, [scaleFactor, roomCoords, doorCoords, windowCoords])
+    }, [resizeFactor,scaleFactor, roomCoords, doorCoords, windowCoords])
 
     const reRunDetection = async () => {
         const formData = new FormData();
@@ -335,7 +361,7 @@ export default function EditView() {
                     </div>
                 </div>
                 <div className='w-[650px] h-[650px]'>
-                    <Canvas ref={canvasRef} move={move} image={image} stageSize={{ width: 650, height: 650 }} setInputModelOpen={null} setPixelDist={null} drawRect={drawRect} setDrawRect={setDrawRect} />
+                    <Canvas ref={canvasRef} move={move} image={image} stageSize={{ width: 650, height: 650 }} setInputModelOpen={null} setPixelDist={null} drawRect={drawRect} setDrawRect={setDrawRect} setDrawWindoorEnabled={setDrawWindoorEnabled} />
                 </div>
                 <div className='p-6 bg-[#292730] rounded-xl'>
                     <h4 className='mb-3 font-bold'>Drawing Tools</h4>
@@ -348,18 +374,26 @@ export default function EditView() {
                             <span className="leading-none mt-0 text-sm">Draw Room</span>
 
                         </button>
-                        <button className={`flex items-center justify-center ${drawRect == 'window' ? "bg-[#421C7F]" : "bg-[#35333A]"}   text-[#E7E6E9] px-5 py-2 rounded-md gap-2 cursor-pointer`}
-                            onClick={() => toggleDraw('window')}
-                        >
-                            <NextImage src={'./window-frame.svg'} alt='logo' width={14} height={14} className='w-[14px] h-[14px]' />
-                            <span className="leading-none mt-0 text-sm">Draw Window</span>
-                        </button>
-                        <button className={`flex items-center justify-center ${drawRect == 'door' ? "bg-[#421C7F]" : "bg-[#35333A]"}  text-[#E7E6E9] px-5 py-2 rounded-md gap-2 cursor-pointer`}
-                            onClick={() => toggleDraw('door')}
-                        >
-                            <DoorClosed size={20} />
-                            <span className="leading-none mt-0 text-sm">Draw Door</span>
-                        </button>
+                        <div className='relative'>
+                            {!drawWindoorEnabled && <span className='absolute text-xs text-[#ffffff] bottom-full mb-0.5'>Select a room</span>}
+                            <button className={`flex items-center justify-center ${drawWindoorEnabled ? drawRect == 'window' ? "bg-[#421C7F]" : "bg-[#35333A]" : "bg-[#313131]"}
+                             text-[#E7E6E9] px-5 py-2 rounded-md gap-2 ${drawWindoorEnabled ? "cursor-pointer pointer-events-auto text-[#E7E6E9]" : "pointer-events-none text-[#292929]"}`}
+                                onClick={() => toggleDraw('window')}
+                            >
+                                <WindowFrame width={14} height={14} color={`${drawWindoorEnabled ? "#E7E6E9" : "#757575"}`} />
+                                <span className={`leading-none mt-0 text-sm ${drawWindoorEnabled ? " text-[#E7E6E9]" : "text-[#757575]"}`}>Draw Window</span>
+                            </button>
+                        </div>
+                        <div className='relative'>
+                            {!drawWindoorEnabled && <span className='absolute text-xs text-[#ffffff] bottom-full mb-0.5'>Select a room</span>}
+                            <button className={`flex items-center justify-center ${drawWindoorEnabled ? drawRect == 'door' ? "bg-[#421C7F]" : "bg-[#35333A]" : "bg-[#313131]"}
+                             text-[#E7E6E9] px-5 py-2 rounded-md gap-2 ${drawWindoorEnabled ? "cursor-pointer pointer-events-auto text-[#E7E6E9]" : "pointer-events-none text-[#292929]"}`}
+                                onClick={() => toggleDraw('door')}
+                            >
+                                <DoorClosed size={20} color={`${drawWindoorEnabled ? "#E7E6E9" : "#757575"}`} />
+                                <span className={`leading-none mt-0 text-sm ${drawWindoorEnabled ? " text-[#E7E6E9]" : "text-[#757575]"}`}>Draw Door</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
                 <div className='p-6 bg-[#292730] rounded-xl w-full mt-4'>
@@ -369,7 +403,7 @@ export default function EditView() {
                                 <h4 className='mb-3 font-bold'>Ceiling Height</h4>
                                 <input ref={ceilingHeightRef} type="number" name="ceiling-height" id="ceiling-height" placeholder='HEIGHT'
                                     className='w-full bg-[#313131] rounded-md text-sm border-1 border-[#585656] px-3 py-2.5 focus:ring-0
-                             focus:border-[hsl(0,1%,54%)] focus:outline-0 [appearance:textfield] 
+                             focus:border-[#8b8989] focus:outline-0 [appearance:textfield] 
                              [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none'/>
                             </div>
                             <div className='flex flex-col'>

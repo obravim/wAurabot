@@ -3,7 +3,7 @@
 import { Stage, Layer, Text, Rect, Line, Label, Tag, Image as KonvaImage, Circle, Transformer } from 'react-konva';
 import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import Konva from 'konva';
-import { DEFAULT_WINDOW_BREADTH, getRoomFromCoords, getWinDoorFromCoords, isItNear, MAX_DOOR_SIZE } from './EditView';
+import { DEFAULT_WINDOW_BREADTH, getRoomFromCoords, getWinDoorFromCoords, isItNear, MAX_DOOR_SIZE, ROOM_COLORS } from './EditView';
 import { useStep } from '@/app/context/StepContext';
 import { useCanvas } from '@/app/context/CanvasContext';
 import { useZone, Zone, ZoneData, Room, WinDoor } from '@/app/context/ZoneContext';
@@ -22,6 +22,7 @@ type CanvasProps = {
     setInputModelOpen: ((inputModelOpen: boolean) => void) | null,
     setPixelDist: ((pixelDist: number) => void) | null,
     stageSize: { width: number, height: number },
+    setDrawWindoorEnabled: React.Dispatch<React.SetStateAction<boolean>>
 };
 
 type Point = [number, number]
@@ -62,27 +63,7 @@ function distancePoints(pointA: Point, pointB: Point) {
     );
 }
 
-function getRoomAnchors(room: Room) {
-    const { x, y, length, breadth } = room.pos;
-    return [
-        { x: x, y: y, type: 'tl' },                             // top-left
-        { x: x + length, y: y, type: 'tr' },                    // top-right
-        { x: x, y: y + breadth, type: 'bl' },                   // bottom-left
-        { x: x + length, y: y + breadth, type: 'br' },          // bottom-right
-    ];
-}
-
-function getCursorForAnchor(type: string, defaultCursor: string): string {
-    switch (type) {
-        case 'tl': return 'nwse-resize';
-        case 'tr': return 'nesw-resize';
-        case 'bl': return 'nesw-resize';
-        case 'br': return 'nwse-resize';
-        default: return defaultCursor;
-    }
-}
-
-const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputModelOpen, setPixelDist, stageSize, drawRect, setDrawRect }, ref) => {
+const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputModelOpen, setPixelDist, stageSize, drawRect, setDrawRect, setDrawWindoorEnabled }, ref) => {
     const { step } = useStep();
     const [imgDrawDetails, setImgDrawDetails] = useState<ImgDrawDetails>();
     const stageRef = useRef<Konva.Stage>(null);
@@ -97,28 +78,24 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const hoverPosRef = useRef<number[] | null>(null);
     const [dimText, setDimText] = useState<string>("");
     const isDrawing = useRef(false);
-    const { scaleFactor } = useCanvas();
+    const { scaleFactor, resizeFactor, setResizeFactor } = useCanvas();
     const [newRect, setNewRect] = useState<RectCoord | null>(null);
     const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     const { zoneData, setZoneData, multiSelect } = useZone();
     const zoneDataRef = useRef<ZoneData>({ zones: [], orphanRoomIds: [], rooms: new Map<string, Room>(), windoors: new Map<string, WinDoor>() });
     const [cursor, setCursor] = useState<'grabbing' | 'crosshair' | 'auto'>('auto');
 
-    // useEffect(() => {
-    //     if (transformerRef.current && roomNodeRef.current) {
-    //         transformerRef.current.nodes([roomNodeRef.current]);
-    //         transformerRef.current.getLayer()?.batchDraw();
-    //     }
-    // }, [selectedRoomId, zoneData]);
-
-    // useEffect(() => {
-    //     if (!selectedRoomId) {
-    //         roomNodeRef.current = null;
-    //         if (!transformerRef.current) return;
-    //         transformerRef.current.nodes([]);
-    //         transformerRef.current.getLayer()?.batchDraw();
-    //     }
-    // }, [selectedRoomId]);
+    useEffect(() => {
+        if (multiSelect) {
+            setSelectedRoomId(null);
+            setDrawWindoorEnabled(false);
+            setCursor('auto')
+            setDrawRect('none')
+        }
+        else {
+            setDrawWindoorEnabled(selectedRoomId != null)
+        }
+    }, [multiSelect, selectedRoomId])
 
     useEffect(() => {
         zoneDataRef.current = zoneData;
@@ -133,12 +110,14 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
         const startX = stageSize.width / 2 - (imgDrawWidth / 2);
         const startY = stageSize.height / 2 - (imgDrawHeight / 2);
         setImgDrawDetails({ imgDrawHeight, imgDrawWidth, startX, startY })
+        setResizeFactor(image.width / imgDrawWidth)
         setLine(null);
         setDimText("");
         setHoverPos(null);
         setNewLine(null);
         setSelectedRoomId(null)
         setCursor('auto')
+        setDrawRect('none')
         newLineRef.current = null;
         hoverPosRef.current = null;
         isDrawing.current = false;
@@ -161,6 +140,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                     isDrawing.current = false;
                     setZoneData(unSelectRooms);
                     setDrawRect('none')
+                    setSelectedRoomId(null);
                 }
             }
             // if (e.ctrlKey && e.key.toLowerCase() === 'g') {
@@ -295,6 +275,10 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                     roomIds: zone.roomIds.filter(id => !roomIdsToDelete.includes(id))
                 }));
                 const newOrphanRoomIds = prev.orphanRoomIds.filter(id => !roomIdsToDelete.includes(id));
+                const rooms = new Map(prev.rooms);
+                for (const [id, room] of rooms.entries()) {
+                    if (room.selected) rooms.set(id, { ...room, selected: false });
+                }
 
                 // Remove from the rooms map
                 // roomIdsToDelete.forEach(id => {
@@ -304,7 +288,8 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 return {
                     ...prev,
                     zones: newZones,
-                    orphanRoomIds: newOrphanRoomIds
+                    orphanRoomIds: newOrphanRoomIds,
+                    rooms: rooms
                 };
             });
             // const selectedRoomIds = rectsRef.current.filter(rect => {
@@ -415,7 +400,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 pointer.y >= imgDrawDetails?.startY &&
                 pointer.y <= imgDrawDetails?.startY + imgDrawDetails.imgDrawHeight)) return;
             if (drawRect == 'room') {
-                setNewRect({ startPoint: [pointer.x, pointer.y], endPoint: [pointer.x, pointer.y], color: 'blue' });
+                setNewRect({ startPoint: [pointer.x, pointer.y], endPoint: [pointer.x, pointer.y], color: ROOM_COLORS[zoneDataRef.current.rooms.size % ROOM_COLORS.length] });
                 isDrawing.current = true;
             }
             else if (drawRect === 'window' || drawRect === 'door') {
@@ -426,7 +411,6 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 const room = zoneDataRef.current.rooms.get(selectedRoomId)
                 if (!room) return;
                 console.log(selectedRoomId);
-
                 if (!isItNear(pointer, room, drawRect === 'door' ? 30 : 20)) {
                     alert("Draw near the room's wall!");
                     return;
@@ -495,33 +479,51 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
             if (!stage) return;
             const pointer = stage.getRelativePointerPosition();
             if (!pointer) return;
-            const clampedX = Math.min(Math.max(pointer.x, imgDrawDetails.startX), imgDrawDetails.startX + imgDrawDetails.imgDrawWidth);
-            const clampedY = Math.min(Math.max(pointer.y, imgDrawDetails.startY), imgDrawDetails.startY + imgDrawDetails.imgDrawHeight);
+            let clampedX = Math.min(Math.max(pointer.x, imgDrawDetails.startX), imgDrawDetails.startX + imgDrawDetails.imgDrawWidth);
+            let clampedY = Math.min(Math.max(pointer.y, imgDrawDetails.startY), imgDrawDetails.startY + imgDrawDetails.imgDrawHeight);
             if (drawRect === 'room') {
                 setNewRect((prev) =>
                     prev ? { ...prev, endPoint: [clampedX, clampedY] } : null
                 );
             }
             else if (drawRect === 'window' || drawRect === 'door') {
+                if (!selectedRoomId) return
                 setNewRect((prev) => {
                     const startPoint = prev?.startPoint
                     if (!startPoint) return prev
                     let [x1, y1] = startPoint
                     let length = Math.abs(clampedX - x1);
                     let breadth = Math.abs(clampedY - y1);
-                    if (drawRect === 'window') {
-                        if (length >= breadth) {
+                    const room = zoneDataRef.current.rooms.get(selectedRoomId)
+                    if (!room) return prev
+                    const wall = isItNear({ x: clampedX, y: clampedY }, room, 20)
+                    if (wall == null) return prev
+                    if (wall == 'h') {
+                        clampedX = Math.max(room.pos.x, Math.min(clampedX, room.pos.x + room.pos.length))
+                        length = Math.abs(clampedX - x1);
+                        breadth = Math.abs(clampedY - y1);
+                        if (drawRect === 'window') {
                             return prev ? { ...prev, endPoint: [clampedX, y1 + DEFAULT_WINDOW_BREADTH] } : null
                         }
                         else {
+                            const max = Math.min(length > breadth ? length : breadth, MAX_DOOR_SIZE);
+                            length = clampedX > x1 ? max : -max
+                            breadth = clampedY > y1 ? max : -max
+                            return prev ? { ...prev, endPoint: [x1 + length, y1 + breadth] } : null
+                        }
+                    } else {
+                        clampedY = Math.max(room.pos.y, Math.min(clampedY, room.pos.y + room.pos.breadth))
+                        length = Math.abs(clampedX - x1);
+                        breadth = Math.abs(clampedY - y1);
+                        if (drawRect === 'window') {
                             return prev ? { ...prev, endPoint: [x1 + DEFAULT_WINDOW_BREADTH, clampedY] } : null
                         }
-                    }
-                    else {
-                        const max = Math.min(length > breadth ? length : breadth, MAX_DOOR_SIZE);
-                        length = max
-                        breadth = max
-                        return prev ? { ...prev, endPoint: [x1 + max, y1 + breadth] } : null
+                        else {
+                            const max = Math.min(length > breadth ? length : breadth, MAX_DOOR_SIZE);
+                            length = clampedX > x1 ? max : -max
+                            breadth = clampedY > y1 ? max : -max
+                            return prev ? { ...prev, endPoint: [x1 + length, y1 + breadth] } : null
+                        }
                     }
                 })
             }
@@ -536,7 +538,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 if (drawRect === 'room') {
                     if (distancePoints(newRect.startPoint, newRect.endPoint) <= 5) return
                     const display = drawRect.charAt(0).toUpperCase() + drawRect.substring(1) + (zoneDataRef.current.rooms.size + 1)
-                    const tempRect = getRoomFromCoords({ roomCoords: newRect, id: drawRect.charAt(0).toUpperCase() + (zoneDataRef.current.rooms.size + 1), display, scaleFactor, selected: false });
+                    const tempRect = getRoomFromCoords({ roomCoords: newRect, id: drawRect.charAt(0).toUpperCase() + (zoneDataRef.current.rooms.size + 1), display, scaleFactor, selected: false, resizeFactor });
                     if (drawRect == 'room') {
                         setZoneData(zoneData => {
                             const rooms = new Map(zoneData.rooms);
@@ -554,10 +556,13 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                     const length = Math.abs(x2 - x1)
                     const breadth = Math.abs(y2 - y1)
                     if (length * breadth < 100) return
-                    if (isItNear({ x: x1 + length / 2, y: y1 + breadth / 2 }, room, drawRect === 'window' ? 20 : 30)) {
+                    const wall = isItNear({ x: x1 + length / 2, y: y1 + breadth / 2 }, room, drawRect === 'window' ? 20 : 30)
+                    if (wall) {
                         const id = drawRect.charAt(0).toUpperCase() + (zoneDataRef.current.windoors.size + 1);
-                        const display = drawRect.charAt(0).toUpperCase() + drawRect.substring(1) + (zoneDataRef.current.rooms.size + 1);
-                        const tempWindoor = getWinDoorFromCoords(newRect, id, display, drawRect, scaleFactor)
+                        const display = drawRect.charAt(0).toUpperCase() + drawRect.substring(1) + (zoneDataRef.current.windoors.size + 1);
+                        const tempWindoor = getWinDoorFromCoords(newRect, id, display, drawRect, scaleFactor, resizeFactor)
+                        tempWindoor.roomId = room.id
+                        tempWindoor.horizontal = wall == 'h'
                         room.children.push(id);
                         setZoneData(zoneData => {
                             const windoors = new Map(zoneData.windoors);
@@ -573,6 +578,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 isDrawing.current = false;
                 setSelectedRoomId(null)
                 setZoneData(unSelectRooms)
+                setDrawRect('none')
             }
             else {
                 if (move || drawRect != 'none') return;
@@ -771,37 +777,6 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
             hoverPosRef.current = null;
         }
     };
-
-    function updateRoomPosition(id: string, x: number, y: number) {
-        setZoneData((prev) => {
-            const updated = new Map(prev.rooms);
-            const room = updated.get(id);
-            if (!room) return prev;
-
-            updated.set(id, { ...room, pos: { ...room.pos, x, y } });
-            return { ...prev, rooms: updated };
-        });
-    }
-
-
-    function updateRoomTransform(id: string, x: number, y: number, width: number, height: number) {
-        setZoneData((prev) => {
-            const updated = new Map(prev.rooms);
-            const room = updated.get(id);
-            if (!room) return prev;
-
-            updated.set(id, {
-                ...room,
-                pos: { x, y, length: width, breadth: height },
-                dimension: {
-                    ...room.dimension,
-                    length_ft: width / 10,
-                    breadth_ft: height / 10,
-                },
-            });
-            return { ...prev, rooms: updated };
-        });
-    }
 
 
     return (

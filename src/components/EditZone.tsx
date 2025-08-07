@@ -24,6 +24,8 @@ import { CSS } from '@dnd-kit/utilities';
 import DraggableRoom from '@/wrappers/DraggableRoom'
 import DroppableZone from '@/wrappers/DroppableZone'
 import RoomPreview from './RoomPreview'
+import { MAX_DOOR_SIZE } from './EditView'
+import Droppable from '@/wrappers/Droppable'
 
 function calculateTotalRoomArea(zoneData: ZoneData): number {
     let total = 0;
@@ -45,7 +47,7 @@ const COLORS = [
 
 export default function EditZone() {
     const { zoneData, setZoneData, multiSelect, setMultiSelect } = useZone();
-    const { scaleFactor } = useCanvas();
+    const { scaleFactor, resizeFactor } = useCanvas();
     const [editModelOpen, setEditModelOpen] = useState(false);
     const editModelData = useRef<EditModelDataType>({ itemId: "", breadth: 0, height: 0, length: 0, isRoom: true, name: "Input", isZone: false })
     const [isTotalAreaOpen, setIsTotalAreaOpen] = useState(false)
@@ -163,8 +165,8 @@ export default function EditZone() {
                     },
                     pos: {
                         ...room.pos,
-                        length: data.length * 12 / scaleFactor,
-                        breadth: data.breadth ? data.breadth * 12 / scaleFactor : room.pos.breadth
+                        length: data.length * 12 / (scaleFactor * resizeFactor),
+                        breadth: data.breadth ? data.breadth * 12 / (scaleFactor * resizeFactor) : room.pos.breadth
                     }
                 });
                 return {
@@ -175,24 +177,49 @@ export default function EditZone() {
                 const updatedWindoors = new Map(prev.windoors);
                 const windoor = updatedWindoors.get(data.itemId);
                 if (!windoor) return prev;
-
+                const room = prev.rooms.get(windoor.roomId)
+                if (!room) return prev;
+                let length = Math.round(data.length * 12 / (scaleFactor * resizeFactor));
+                let breadth = Math.round(data.length * 12 / (scaleFactor * resizeFactor));
+                if (windoor.type === 'window') {
+                    if (windoor.horizontal) {
+                        let maxLength = room.pos.x + room.pos.length - windoor.pos.x
+                        length = Math.min(maxLength, length);
+                        breadth = windoor.pos.breadth
+                    } else {
+                        let maxLength = room.pos.y + room.pos.breadth - windoor.pos.y
+                        breadth = Math.min(maxLength, length);
+                        length = windoor.pos.length
+                    }
+                } else {
+                    if (windoor.horizontal) {
+                        let maxLength = room.pos.x + room.pos.length - windoor.pos.x
+                        maxLength = Math.min(maxLength, MAX_DOOR_SIZE)
+                        length = Math.min(maxLength, length);
+                        breadth = length
+                    } else {
+                        let maxLength = room.pos.y + room.pos.breadth - windoor.pos.y
+                        maxLength = Math.min(maxLength, MAX_DOOR_SIZE)
+                        breadth = Math.min(maxLength, length);
+                        length = breadth
+                    }
+                }
                 updatedWindoors.set(data.itemId, {
                     ...windoor,
                     name: data.name,
                     dimension: {
-                        length_ft: data.length,
+                        length_ft: parseFloat((windoor.horizontal ? (length * scaleFactor * resizeFactor / 12) : (breadth * scaleFactor * resizeFactor / 12)).toPrecision(2)),
                         height_ft: data.height,
                     },
                     pos: {
                         ...windoor.pos,
-                        length: data.length * 12 / scaleFactor,
-                        breadth: data.breadth ? data.breadth * 12 / scaleFactor : windoor.pos.breadth
+                        length: length,
+                        breadth: breadth
                     }
                 });
                 return {
                     ...prev,
                     windoors: updatedWindoors,
-
                 };
             }
         });
@@ -235,62 +262,85 @@ export default function EditZone() {
     }
 
     function handleDragEnd(event: DragEndEvent) {
-        const { active, over } = event;
-        if (!over) return;
+        const activeId = event.active.id;
+        const overId = event.over?.id;
+        if (!overId || activeId === overId) return;
 
-        const activeRoomId = active.id.toString().replace("room:", "");
-        const overId = over.id.toString();
+        const activeRoomId = String(activeId).replace("room:", "");
+        const overRoomId = String(overId).startsWith("room:") ? String(overId).replace("room:", "") : null;
 
-        const overZoneId = (() => {
-            if (overId === "orphan") return null;
-            if (overId.startsWith("zone:")) return overId.replace("zone:", "");
-            if (overId.startsWith("room:")) {
-                const droppedRoomId = overId.replace("room:", "");
-                const zone = zoneData.zones.find(z => z.roomIds.includes(droppedRoomId));
-                return zone?.id ?? null;
-            }
+        const activeInZone = zoneData.zones.find(z => z.roomIds.includes(activeRoomId));
+        const overInZone = zoneData.zones.find(z => z.roomIds.includes(overRoomId || ""));
 
-            return null;
-        })();
-
-        const fromZoneId = zoneData.rooms.get(activeRoomId)?.zone ?? null;
-        if (overZoneId === fromZoneId) return;
+        const activeZoneId = activeInZone?.id ?? null;
+        const overZoneId = overInZone?.id ?? null;
 
         setZoneData(prev => {
             const rooms = new Map(prev.rooms);
             const room = rooms.get(activeRoomId);
             if (!room) return prev;
 
-            const updatedRooms = new Map(rooms);
-            updatedRooms.set(activeRoomId, {
-                ...room,
-                zone: overZoneId,
-                zoneColor: overZoneId
-                    ? prev.zones.find(z => z.id === overZoneId)?.color || null
-                    : null,
-            });
-
             const zones = prev.zones.map(zone => {
-                const roomIds = zone.roomIds.filter(id => id !== activeRoomId);
-                if (zone.id === overZoneId) {
-                    roomIds.push(activeRoomId);
+                let roomIds = [...zone.roomIds];
+
+                // Remove from source zone
+                if (zone.id === activeZoneId) {
+                    roomIds = roomIds.filter(id => id !== activeRoomId);
                 }
+
+                // Add to target zone
+                if (zone.id === overZoneId) {
+                    roomIds = roomIds.filter(id => id !== activeRoomId); // Avoid duplicates
+
+                    if (overRoomId) {
+                        const index = roomIds.indexOf(overRoomId);
+                        if (index !== -1) {
+                            roomIds.splice(index, 0, activeRoomId);
+                        } else {
+                            roomIds.push(activeRoomId);
+                        }
+                    } else {
+                        roomIds.push(activeRoomId);
+                    }
+                }
+
                 return { ...zone, roomIds };
             });
 
-            const orphanRoomIds = overZoneId
-                ? prev.orphanRoomIds.filter(id => id !== activeRoomId)
-                : [...prev.orphanRoomIds.filter(id => id !== activeRoomId), activeRoomId];
+            // Orphan logic
+            let orphanRoomIds = [...prev.orphanRoomIds];
+            orphanRoomIds = orphanRoomIds.filter(id => id !== activeRoomId);
+
+            if (!overZoneId) {
+                if (overRoomId) {
+                    const index = orphanRoomIds.indexOf(overRoomId);
+                    if (index !== -1) {
+                        orphanRoomIds.splice(index, 0, activeRoomId);
+                    } else {
+                        orphanRoomIds.push(activeRoomId);
+                    }
+                } else {
+                    orphanRoomIds.push(activeRoomId);
+                }
+            }
+
+            // Update room stroke color based on location
+            const updatedRoom = {
+                ...room,
+                zoneColor: overZoneId
+                    ? zones.find(z => z.id === overZoneId)?.color ?? null
+                    : null,
+                zone: overZoneId
+            };
+            rooms.set(activeRoomId, updatedRoom);
 
             return {
                 ...prev,
                 zones,
                 orphanRoomIds,
-                rooms: updatedRooms,
+                rooms,
             };
         });
-
-        setActiveId(null);
     }
 
     function handleSearchChange(searchString: string) {
@@ -456,71 +506,77 @@ export default function EditZone() {
                                                             zone.roomIds && zone.roomIds.map((roomId, roomIndex) => {
                                                                 const room = dataToRender.rooms.get(roomId);
                                                                 if (!room) return null;
-                                                                return room.expanded ?
-                                                                    <div key={room.id} className='flex flex-col w-full px-2 gap-4'>
-                                                                        <DraggableRoom key={room.id} id={`room:${room.id}`} color={zone.color}>
-                                                                            {/* <Drag color={zone.color} width={16} height={16} /> */}
-                                                                            <div className={`flex items-center gap-2 bg-[#421C7F] p-2 px-3 rounded-lg grow justify-between cursor-pointer hover:bg-[#5725a7]`}
-                                                                                onClick={() => toggleRoomExpand(room.id)}
-                                                                            >
-                                                                                <div className='flex flex-col items-start'>
-                                                                                    <p style={{ color: zone.color }} className={`text-sm mb-1 font-medium`}>
-                                                                                        {room.name}
-                                                                                    </p>
-                                                                                    <p style={{ color: zone.color }} className={`text-xs`}>
-                                                                                        Dimension: {`${room.dimension.length_ft.toFixed(2)} ft x ${room.dimension.breadth_ft.toFixed(2)} ft`}
-                                                                                    </p>
-                                                                                    <p style={{ color: zone.color }} className={`text-xs`}>
-                                                                                        Area: {`${(room.dimension.length_ft * room.dimension.breadth_ft).toFixed(2)} ft2`}
-                                                                                    </p>
-                                                                                </div>
-                                                                                <div className='flex items-center gap-2'>
-                                                                                    <button className='flex items-center gap-1.5 text-xs cursor-pointer' style={{ color: zone.color }}
-                                                                                        onClick={(e) => { e.stopPropagation(); openModel({ itemId: room.id, name: room.name, isZone: false, isRoom: true, length: room.dimension.length_ft, breadth: room.dimension.breadth_ft, height: room.dimension.ceilingHeight_ft }) }}
-                                                                                    >
-                                                                                        <EditIcon size={12} color={zone.color} />
-                                                                                        Edit
-                                                                                    </button>
-                                                                                    <button>
-                                                                                        <ChevronDown size={14} color={zone.color} className="rotate-180" />
-                                                                                    </button>
-                                                                                </div>
-                                                                            </div>
-                                                                        </DraggableRoom>
-                                                                        {
-                                                                            room.children && room.children.map((itemId) => {
-                                                                                const item = dataToRender.windoors.get(itemId)
-                                                                                if (!item) return null;
-                                                                                return <div key={item.id} className='px-2 flex items-center gap-2'>
-                                                                                    <Drag color={zone.color} width={12} height={12} />
-                                                                                    <div className={`flex items-center gap-2 bg-[#292929] p-3 pl-4 rounded-lg grow justify-between`}>
-                                                                                        <div className='flex items-center gap-2'>
-                                                                                            {item.type == "door" ? <DoorOpen size={32} color={zone.color} /> : <WindowFrame color={zone.color} width={32} height={32} />}
+                                                                return <Droppable key={room.id} id={`room:${room.id}`} data={{ type: "room" }}>
+                                                                    {(provided) => (
+                                                                        <div ref={provided.setNodeRef} {...provided.droppableProps}>
+                                                                            {room.expanded ?
+                                                                                <div key={room.id} className='flex flex-col w-full px-2 gap-4'>
+                                                                                    <DraggableRoom key={room.id} id={`room:${room.id}`} color={zone.color}>
+                                                                                        {/* <Drag color={zone.color} width={16} height={16} /> */}
+                                                                                        <div className={`flex items-center gap-2 bg-[#421C7F] p-2 px-3 rounded-lg grow justify-between cursor-pointer hover:bg-[#5725a7]`}
+                                                                                            onClick={() => toggleRoomExpand(room.id)}
+                                                                                        >
                                                                                             <div className='flex flex-col items-start'>
-                                                                                                <p style={{ color: zone.color }} className={`text-sm mb-1 font-bold`}>
-                                                                                                    {item.name}
+                                                                                                <p style={{ color: zone.color }} className={`text-sm mb-1 font-medium`}>
+                                                                                                    {room.name}
                                                                                                 </p>
                                                                                                 <p style={{ color: zone.color }} className={`text-xs`}>
-                                                                                                    Dimension: {`${item.dimension.length_ft.toFixed(2)} ft x ${item.dimension.height_ft.toFixed(2)} ft`}
+                                                                                                    Dimension: {`${room.dimension.length_ft.toFixed(2)} ft x ${room.dimension.breadth_ft.toFixed(2)} ft`}
+                                                                                                </p>
+                                                                                                <p style={{ color: zone.color }} className={`text-xs`}>
+                                                                                                    Area: {`${(room.dimension.length_ft * room.dimension.breadth_ft).toFixed(2)} ft2`}
                                                                                                 </p>
                                                                                             </div>
+                                                                                            <div className='flex items-center gap-2'>
+                                                                                                <button className='flex items-center gap-1.5 text-xs cursor-pointer' style={{ color: zone.color }}
+                                                                                                    onClick={(e) => { e.stopPropagation(); openModel({ itemId: room.id, name: room.name, isZone: false, isRoom: true, length: room.dimension.length_ft, breadth: room.dimension.breadth_ft, height: room.dimension.ceilingHeight_ft }) }}
+                                                                                                >
+                                                                                                    <EditIcon size={12} color={zone.color} />
+                                                                                                    Edit
+                                                                                                </button>
+                                                                                                <button>
+                                                                                                    <ChevronDown size={14} color={zone.color} className="rotate-180" />
+                                                                                                </button>
+                                                                                            </div>
                                                                                         </div>
-                                                                                        <button className='flex items-center gap-1.5 text-xs cursor-pointer' style={{ color: zone.color }}
-                                                                                            onClick={(e) => { e.stopPropagation(); openModel({ itemId: item.id, name: item.name, isZone: false, isRoom: false, length: item.dimension.length_ft, breadth: null, height: item.dimension.height_ft }) }}
-                                                                                        >
-                                                                                            <EditIcon size={12} color={zone.color} />
-                                                                                            Edit
-                                                                                        </button>
-                                                                                    </div>
+                                                                                    </DraggableRoom>
+                                                                                    {
+                                                                                        room.children && room.children.map((itemId) => {
+                                                                                            const item = dataToRender.windoors.get(itemId)
+                                                                                            if (!item) return null;
+                                                                                            return <div key={item.id} className='px-2 flex items-center gap-2'>
+                                                                                                <Drag color={zone.color} width={12} height={12} />
+                                                                                                <div className={`flex items-center gap-2 bg-[#292929] p-3 pl-4 rounded-lg grow justify-between`}>
+                                                                                                    <div className='flex items-center gap-2'>
+                                                                                                        {item.type == "door" ? <DoorOpen size={32} color={zone.color} /> : <WindowFrame color={zone.color} width={32} height={32} />}
+                                                                                                        <div className='flex flex-col items-start'>
+                                                                                                            <p style={{ color: zone.color }} className={`text-sm mb-1 font-bold`}>
+                                                                                                                {item.name}
+                                                                                                            </p>
+                                                                                                            <p style={{ color: zone.color }} className={`text-xs`}>
+                                                                                                                Dimension: {`${item.dimension.length_ft.toFixed(2)} ft x ${item.dimension.height_ft.toFixed(2)} ft`}
+                                                                                                            </p>
+                                                                                                        </div>
+                                                                                                    </div>
+                                                                                                    <button className='flex items-center gap-1.5 text-xs cursor-pointer' style={{ color: zone.color }}
+                                                                                                        onClick={(e) => { e.stopPropagation(); openModel({ itemId: item.id, name: item.name, isZone: false, isRoom: false, length: item.dimension.length_ft, breadth: null, height: item.dimension.height_ft }) }}
+                                                                                                    >
+                                                                                                        <EditIcon size={12} color={zone.color} />
+                                                                                                        Edit
+                                                                                                    </button>
+                                                                                                </div>
+                                                                                            </div>
+                                                                                        })
+                                                                                    }
+                                                                                </div> : <div key={roomIndex} className='mx-6 hover:bg-[#333333] flex items-center justify-between cursor-pointer bg-[#1F1F1F] px-2 py-2 rounded-lg'
+                                                                                    onClick={() => toggleRoomExpand(room.id)}
+                                                                                >
+                                                                                    <p style={{ color: zone.color }} className='text-sm font-medium'>{room.name}</p>
+                                                                                    <button><ChevronDown size={20} color={zone.color} /></button>
                                                                                 </div>
-                                                                            })
-                                                                        }
-                                                                    </div> : <div key={roomIndex} className='mx-6 hover:bg-[#333333] flex items-center justify-between cursor-pointer bg-[#1F1F1F] px-2 py-2 rounded-lg'
-                                                                        onClick={() => toggleRoomExpand(room.id)}
-                                                                    >
-                                                                        <p style={{ color: zone.color }} className='text-sm font-medium'>{room.name}</p>
-                                                                        <button><ChevronDown size={20} color={zone.color} /></button>
-                                                                    </div>
+                                                                            }</div>
+                                                                    )}
+                                                                </Droppable>
                                                             })
                                                         }
                                                     </div> : <div className='flex items-center justify-between px-6 py-3 cursor-pointer hover:bg-[#333333]'
@@ -551,72 +607,79 @@ export default function EditZone() {
                                     dataToRender.orphanRoomIds && dataToRender.orphanRoomIds.map((roomId, roomIndex) => {
                                         const room = dataToRender.rooms.get(roomId);
                                         if (!room) return null;
-                                        return room.expanded ?
-                                            <div key={room.id} className='flex flex-col w-full px-2 gap-4'>
-                                                <DraggableRoom key={room.id} id={`room:${room.id}`} color={room.stroke}>
-                                                    {/* <Drag color={room.stroke} width={12} height={12} /> */}
-                                                    <div className={`flex items-center gap-2 bg-[#421C7F] p-2 px-3 rounded-lg grow justify-between cursor-pointer hover:bg-[#5725a7]`}
-                                                        onClick={() => toggleRoomExpand(room.id)}
-                                                    >
-                                                        <div className='flex flex-col items-start'>
-                                                            <p style={{ color: room.stroke }} className={`text-sm mb-1 font-medium`}>
-                                                                {room.name}
-                                                            </p>
-                                                            <p style={{ color: room.stroke }} className={`text-xs`}>
-                                                                Dimension: {`${room.dimension.length_ft.toFixed(2)} ft x ${room.dimension.breadth_ft.toFixed(2)} ft`}
-                                                            </p>
-                                                            <p style={{ color: room.stroke }} className={`text-xs`}>
-                                                                Area: {`${(room.dimension.length_ft * room.dimension.breadth_ft).toFixed(2)}ft2`}
-                                                            </p>
-                                                        </div>
-                                                        <div className='flex items-center gap-2'>
-                                                            <button className='flex items-center gap-1.5 text-xs cursor-pointer' style={{ color: room.stroke }}
-                                                                onClick={(e) => { e.stopPropagation(); openModel({ itemId: room.id, name: room.name, isZone: false, isRoom: true, length: room.dimension.length_ft, breadth: room.dimension.breadth_ft, height: room.dimension.ceilingHeight_ft, }) }}
-                                                            >
-                                                                <EditIcon size={12} color={room.stroke} />
-                                                                Edit
-                                                            </button>
-                                                            <button>
-                                                                <ChevronDown size={14} color={room.stroke} className="rotate-180" />
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                </DraggableRoom>
-                                                {
-                                                    room.children && room.children.map((itemId) => {
-                                                        const item = dataToRender.windoors.get(itemId)
-                                                        if (!item) return null;
-                                                        return <div key={item.id} className='px-2 flex items-center gap-2'>
-                                                            <Drag color={room.stroke} width={12} height={12} />
-                                                            <div className={`flex items-center gap-2 bg-[#292929] p-3 pl-4 rounded-lg grow justify-between`}>
-                                                                <div className='flex items-center gap-2'>
-                                                                    {item.type == "door" ? <DoorOpen size={32} color={room.stroke} /> : <WindowFrame color={room.stroke} width={32} height={32} />}
-                                                                    <div className='flex flex-col items-start'>
-                                                                        <p style={{ color: room.stroke }} className={`text-sm mb-1 font-bold`}>
-                                                                            {item.name}
-                                                                        </p>
-                                                                        <p style={{ color: room.stroke }} className={`text-xs`}>
-                                                                            Dimension: {`${item.dimension.length_ft.toFixed(2)} ft x ${item.dimension.height_ft.toFixed(2)} ft`}
-                                                                        </p>
+                                        return (
+                                            <Droppable key={room.id} id={`room:${room.id}`} data={{ type: "room" }}>
+                                                {(provided) => (
+                                                    <div ref={provided.setNodeRef} {...provided.droppableProps}>
+                                                        {room.expanded ?
+                                                            <div key={room.id} className='flex flex-col w-full px-2 gap-4'>
+                                                                <DraggableRoom key={room.id} id={`room:${room.id}`} color={room.stroke}>
+                                                                    {/* <Drag color={room.stroke} width={12} height={12} /> */}
+                                                                    <div className={`flex items-center gap-2 bg-[#421C7F] p-2 px-3 rounded-lg grow justify-between cursor-pointer hover:bg-[#5725a7]`}
+                                                                        onClick={() => toggleRoomExpand(room.id)}
+                                                                    >
+                                                                        <div className='flex flex-col items-start'>
+                                                                            <p style={{ color: room.stroke }} className={`text-sm mb-1 font-medium`}>
+                                                                                {room.name}
+                                                                            </p>
+                                                                            <p style={{ color: room.stroke }} className={`text-xs`}>
+                                                                                Dimension: {`${room.dimension.length_ft.toFixed(2)} ft x ${room.dimension.breadth_ft.toFixed(2)} ft`}
+                                                                            </p>
+                                                                            <p style={{ color: room.stroke }} className={`text-xs`}>
+                                                                                Area: {`${(room.dimension.length_ft * room.dimension.breadth_ft).toFixed(2)}ft2`}
+                                                                            </p>
+                                                                        </div>
+                                                                        <div className='flex items-center gap-2'>
+                                                                            <button className='flex items-center gap-1.5 text-xs cursor-pointer' style={{ color: room.stroke }}
+                                                                                onClick={(e) => { e.stopPropagation(); openModel({ itemId: room.id, name: room.name, isZone: false, isRoom: true, length: room.dimension.length_ft, breadth: room.dimension.breadth_ft, height: room.dimension.ceilingHeight_ft, }) }}
+                                                                            >
+                                                                                <EditIcon size={12} color={room.stroke} />
+                                                                                Edit
+                                                                            </button>
+                                                                            <button>
+                                                                                <ChevronDown size={14} color={room.stroke} className="rotate-180" />
+                                                                            </button>
+                                                                        </div>
                                                                     </div>
-                                                                </div>
-                                                                <div className='flex items-center gap-1.5 text-xs cursor-pointer' style={{ color: room.stroke }}
-                                                                    onClick={(e) => { e.stopPropagation(); openModel({ itemId: item.id, name: item.name, isZone: false, isRoom: false, length: item.dimension.length_ft, breadth: null, height: item.dimension.height_ft, }) }}
-                                                                >
-                                                                    <EditIcon size={12} color={room.stroke} />
-                                                                    Edit
-                                                                </div>
+                                                                </DraggableRoom>
+                                                                {
+                                                                    room.children && room.children.map((itemId) => {
+                                                                        const item = dataToRender.windoors.get(itemId)
+                                                                        if (!item) return null;
+                                                                        return <div key={item.id} className='px-2 flex items-center gap-2'>
+                                                                            <Drag color={room.stroke} width={12} height={12} />
+                                                                            <div className={`flex items-center gap-2 bg-[#292929] p-3 pl-4 rounded-lg grow justify-between`}>
+                                                                                <div className='flex items-center gap-2'>
+                                                                                    {item.type == "door" ? <DoorOpen size={32} color={room.stroke} /> : <WindowFrame color={room.stroke} width={32} height={32} />}
+                                                                                    <div className='flex flex-col items-start'>
+                                                                                        <p style={{ color: room.stroke }} className={`text-sm mb-1 font-bold`}>
+                                                                                            {item.name}
+                                                                                        </p>
+                                                                                        <p style={{ color: room.stroke }} className={`text-xs`}>
+                                                                                            Dimension: {`${item.dimension.length_ft.toFixed(2)} ft x ${item.dimension.height_ft.toFixed(2)} ft`}
+                                                                                        </p>
+                                                                                    </div>
+                                                                                </div>
+                                                                                <div className='flex items-center gap-1.5 text-xs cursor-pointer' style={{ color: room.stroke }}
+                                                                                    onClick={(e) => { e.stopPropagation(); openModel({ itemId: item.id, name: item.name, isZone: false, isRoom: false, length: item.dimension.length_ft, breadth: null, height: item.dimension.height_ft, }) }}
+                                                                                >
+                                                                                    <EditIcon size={12} color={room.stroke} />
+                                                                                    Edit
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    })
+                                                                }
                                                             </div>
-                                                        </div>
-                                                    })
-                                                }
-                                            </div>
-                                            : <div key={roomIndex} className='mx-6 hover:bg-[#333333] flex items-center justify-between cursor-pointer bg-[#1F1F1F] px-2 py-2 rounded-lg'
-                                                onClick={() => toggleRoomExpand(room.id)}
-                                            >
-                                                <p style={{ color: room.stroke }} className='text-sm font-medium '>{room.name}</p>
-                                                <button><ChevronDown size={20} color={room.stroke} /></button>
-                                            </div>
+                                                            : <div key={roomIndex} className='mx-6 hover:bg-[#333333] flex items-center justify-between cursor-pointer bg-[#1F1F1F] px-2 py-2 rounded-lg'
+                                                                onClick={() => toggleRoomExpand(room.id)}
+                                                            >
+                                                                <p style={{ color: room.stroke }} className='text-sm font-medium '>{room.name}</p>
+                                                                <button><ChevronDown size={20} color={room.stroke} /></button>
+                                                            </div>}</div>
+                                                )}
+                                            </Droppable>
+                                        )
                                     })
                                 }
                             </div>

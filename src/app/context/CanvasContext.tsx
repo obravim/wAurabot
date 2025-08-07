@@ -8,6 +8,8 @@ export type CanvasContextType = {
     setCanvasFile: (file: File) => void;
     scaleFactor: number,
     setScaleFactor: (scaleFactor: number) => void;
+    resizeFactor: number,
+    setResizeFactor: (resizeFactor: number) => void;
     roomCoords: RectCoordsType;
     setRoomCoords: (roomCoords: RectCoordsType) => void
     windowCoords: RectCoordsType;
@@ -21,11 +23,12 @@ const CanvasContext = createContext<CanvasContextType | undefined>(undefined);
 export function CanvasProvider({ children }: { children: React.ReactNode }) {
     const [file, setFile] = useState<File | null>(null);
     const [scaleFactor, setScaleFactor] = useState(1);
+    const [resizeFactor, setResizeFactor] = useState(1);
     const [roomCoords, setRoomCoords] = useState<RectCoordsType>([]);
     const [doorCoords, setDoorCoords] = useState<RectCoordsType>([]);
     const [windowCoords, setWindowCoords] = useState<RectCoordsType>([]);
 
-    return <CanvasContext.Provider value={{ file: file, setCanvasFile: setFile, scaleFactor: scaleFactor, setScaleFactor: setScaleFactor, roomCoords, setRoomCoords: setRoomCoords, windowCoords, setWindowCoords: setWindowCoords, doorCoords, setDoorCoords: setDoorCoords }}>
+    return <CanvasContext.Provider value={{ file: file, setCanvasFile: setFile, scaleFactor: scaleFactor, setScaleFactor: setScaleFactor, roomCoords, setRoomCoords: setRoomCoords, windowCoords, setWindowCoords: setWindowCoords, doorCoords, setDoorCoords: setDoorCoords, resizeFactor: resizeFactor, setResizeFactor: setResizeFactor }}>
         {children}
     </CanvasContext.Provider>
 }
