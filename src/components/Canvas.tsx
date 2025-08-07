@@ -68,6 +68,8 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const [imgDrawDetails, setImgDrawDetails] = useState<ImgDrawDetails>();
     const stageRef = useRef<Konva.Stage>(null);
     const layerRef = useRef<Konva.Layer>(null);
+    const transformerRef = useRef<Konva.Transformer>(null);
+    const roomNodeRefs = useRef<Map<string, Konva.Rect>>(new Map());
     const isDragging = useRef(false);
     const lastPos = useRef<{ x: number; y: number } | null>(null);
     const lastDist = useRef<number | null>(null);
@@ -84,6 +86,20 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const { zoneData, setZoneData, multiSelect } = useZone();
     const zoneDataRef = useRef<ZoneData>({ zones: [], orphanRoomIds: [], rooms: new Map<string, Room>(), windoors: new Map<string, WinDoor>() });
     const [cursor, setCursor] = useState<'grabbing' | 'crosshair' | 'auto'>('auto');
+
+    useEffect(() => {
+        if (selectedRoomId && transformerRef.current) {
+            const node = roomNodeRefs.current.get(selectedRoomId);
+            if (node) {
+            transformerRef.current.nodes([node]);
+            transformerRef.current.getLayer()?.batchDraw();
+            }
+        } else if (transformerRef.current) {
+            transformerRef.current.nodes([]);
+            transformerRef.current.getLayer()?.batchDraw();
+        }
+    }, [selectedRoomId, zoneData.rooms]);
+
 
     useEffect(() => {
         if (multiSelect) {
@@ -312,6 +328,10 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     };
 
     const handleMouseDown = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+        // If the target is a Rect (room), let Konva handle the drag
+        if (e.target instanceof Konva.Rect) {
+            return;
+        }
         if (move) {
             isDragging.current = true;
             let clientX = 0;
@@ -873,22 +893,236 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                         }).map(roomId => {
                             const room = zoneData.rooms.get(roomId);
                             if (!room) return null;
+
+                            const anySelected = Array.from(zoneData.rooms.values()).some(r => r.selected);
                             const roomRect = room.pos
 
                             return <React.Fragment key={room.id}>
                                 <Rect
                                     key={room.id}
+                                    ref={(node) => {
+                                        if (node) {
+                                            roomNodeRefs.current.set(room.id, node);
+                                            if (room.selected) {
+                                                node.moveToTop();
+                                            }
+                                        }
+                                        else { 
+                                            roomNodeRefs.current.delete(room.id);
+                                        }
+                                    }}
                                     x={roomRect.x}
                                     y={roomRect.y}
                                     width={roomRect.length}
                                     height={roomRect.breadth}
+                                    opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
                                     stroke={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
-                                    strokeWidth={room.selected ? 2 : 3}
+                                    strokeWidth={room.selected ? 3 : 2}
+                                    draggable={room.selected}
+                                    onDragStart={() => {               
+                                        // Bring to front when dragging starts
+                                        const node = roomNodeRefs.current.get(room.id);
+                                        if (node) {
+                                            node.moveToTop();
+                                            layerRef.current?.batchDraw();
+                                        }
+                                        room.dragStartPos = { x: roomRect.x, y: roomRect.y };
+                                    }}
+                                    onDragMove={(e) => {
+                                        const node = e.target;
+                                        const dx = node.x() - room.dragStartPos!.x;
+                                        const dy = node.y() - room.dragStartPos!.y;
+                                        
+                                        // Update children positions in real-time during drag
+                                        const updatedRoom = { ...room };
+                                        updatedRoom.pos.x = node.x();
+                                        updatedRoom.pos.y = node.y();
+                                        
+                                        // Update children positions
+                                        updatedRoom.children.forEach(childId => {
+                                            const child = zoneDataRef.current.windoors.get(childId);
+                                            if (child) {
+                                                child.pos.x += dx;
+                                                child.pos.y += dy;
+                                            }
+                                        });
+                                        
+                                        // Update the room's position reference
+                                        room.dragStartPos = { x: node.x(), y: node.y() };
+                                    }}
+                                    onDragEnd={(e) => {
+                                        const node = e.target;
+                                        const dx = node.x() - room.dragStartPos!.x;
+                                        const dy = node.y() - room.dragStartPos!.y;
+                                        
+                                        setZoneData(prev => {
+                                            const newRooms = new Map(prev.rooms);
+                                            const newWindoors = new Map(prev.windoors);
+                                            
+                                            // Update room position
+                                            const updatedRoom = { 
+                                                ...room,
+                                                selected: true,
+                                                pos: {
+                                                    ...room.pos,
+                                                    x: node.x(),
+                                                    y: node.y()
+                                                }
+                                            };
+                                            newRooms.set(room.id, updatedRoom);
+                                            
+                                            // Update all children positions
+                                            room.children.forEach(childId => {
+                                                const child = newWindoors.get(childId);
+                                                if (child) {
+                                                    newWindoors.set(childId, {
+                                                        ...child,
+                                                        pos: {
+                                                            ...child.pos,
+                                                            x: child.pos.x + dx,
+                                                            y: child.pos.y + dy
+                                                        }
+                                                    });
+                                                }
+                                            });
+                                            
+                                            return {
+                                                ...prev,
+                                                rooms: newRooms,
+                                                windoors: newWindoors
+                                            };
+                                        });
+                                        // Force update transformer after drag
+                                        setTimeout(() => {
+                                            if (transformerRef.current && roomNodeRefs.current.has(room.id)) {
+                                                transformerRef.current.nodes([roomNodeRefs.current.get(room.id)!]);
+                                                transformerRef.current.getLayer()?.batchDraw();
+                                            }
+                                        }, 0);
+                                    }}
+                                    onMouseDown={(e) => {
+                                        e.cancelBubble = true;
+                                        if (!multiSelect && !room.selected) {
+                                            setZoneData(unSelectRooms);
+                                        }
+                                        setSelectedRoomId(room.id);
+                                        const node = e.target;
+                                        node.moveToTop();
+                                        layerRef.current?.batchDraw();
+                                    }}
+                                    onTransformEnd={(e) => {
+                                        const node = e.target;
+                                        const scaleX = node.scaleX();
+                                        const scaleY = node.scaleY();
+
+                                        // --- OLD room values (before transform) from your state object ---
+                                        const oldX = room.pos.x;
+                                        const oldY = room.pos.y;
+                                        const oldWidth = room.pos.length;   // px
+                                        const oldHeight = room.pos.breadth; // px
+
+                                        const oldCenterX = oldX + oldWidth / 2;
+                                        const oldCenterY = oldY + oldHeight / 2;
+
+                                        // Get new pixel size (minimum constraint)
+                                        const newWidthPx = Math.max(10, node.width() * scaleX);
+                                        const newHeightPx = Math.max(10, node.height() * scaleY);
+
+                                        // Convert to feet
+                                        const newWidthFt = newWidthPx * (scaleFactor * resizeFactor) / 12;
+                                        const newHeightFt = newHeightPx * (scaleFactor * resizeFactor) / 12;
+
+                                        // Store new top-left position
+                                        const newX = node.x();
+                                        const newY = node.y();
+
+                                        // Room center BEFORE resetting scale
+                                        const newCenterX = newX + newWidthPx / 2;
+                                        const newCenterY  = newY + newHeightPx / 2;
+
+                                        // Reset scale (we bake dimensions into width/height)
+                                        node.scaleX(1);
+                                        node.scaleY(1);
+
+                                        setZoneData(prev => {
+                                            const newRooms = new Map(prev.rooms);
+                                            const newWindoors = new Map(prev.windoors);
+
+                                            // Update room data
+                                            const updatedRoom = { 
+                                                ...room,
+                                                selected: true,
+                                                pos: {
+                                                    x: newX,
+                                                    y: newY,
+                                                    length: newWidthPx,
+                                                    breadth: newHeightPx
+                                                },
+                                                dimension: {
+                                                    ...room.dimension,
+                                                    length_ft: newWidthFt,
+                                                    breadth_ft: newHeightFt,
+                                                    ceilingHeight_ft: room.dimension.ceilingHeight_ft,
+                                                    area_ft: newWidthFt * newHeightFt
+                                                }
+                                            };
+                                            newRooms.set(room.id, updatedRoom);
+
+                                            // Update children (scale position & dimensions)
+                                            room.children.forEach(childId => {
+                                                const child = newWindoors.get(childId);
+                                                if (child) {
+                                                    // Position relative to old room center
+                                                    const relX = child.pos.x - oldCenterX;
+                                                    const relY = child.pos.y - oldCenterY;
+
+                                                    // Apply scaling
+                                                    const scaledRelX = relX * scaleX;
+                                                    const scaledRelY = relY * scaleY;
+
+                                                    // New absolute position
+                                                    const newChildX = newCenterX + scaledRelX;
+                                                    const newChildY = newCenterY + scaledRelY;
+
+                                                    // Scale dimensions (optional)
+                                                    const newChildWidthFt = (child.dimension?.length_ft ?? 0) * scaleX;
+
+                                                    newWindoors.set(childId, {
+                                                        ...child,
+                                                        pos: {
+                                                            ...child.pos,
+                                                            x: newChildX,
+                                                            y: newChildY
+                                                        },
+                                                        dimension: {
+                                                            ...child.dimension,
+                                                            length_ft: newChildWidthFt
+                                                        }
+                                                    });
+                                                }
+                                            });
+
+                                            return {
+                                                ...prev,
+                                                rooms: newRooms,
+                                                windoors: newWindoors
+                                            };
+                                        });
+
+                                        // Force update transformer
+                                        setTimeout(() => {
+                                            if (transformerRef.current && roomNodeRefs.current.has(room.id)) {
+                                                transformerRef.current.nodes([roomNodeRefs.current.get(room.id)!]);
+                                                transformerRef.current.getLayer()?.batchDraw();
+                                            }
+                                        }, 0);
+                                    }}
                                 />
                                 <Label key={room.id + "_label"} x={roomRect.x + roomRect.length / 2 - 20} y={roomRect.y + roomRect.breadth / 2 - 20} /*roomRect.y + roomRect.height} */>
                                     <Text
                                         text={room.name}
                                         fontSize={14}
+                                        opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
                                         fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                         padding={0}
                                         fontStyle='bold'   // Adjust horizontal alignment if needed
@@ -898,6 +1132,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                     <Text
                                         text={`${room.dimension.length_ft.toFixed(2)} * ${room.dimension.breadth_ft.toFixed(2)} ft`}
                                         fontSize={12}
+                                        opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
                                         fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                         padding={4}     // Adjust horizontal alignment if needed
                                     />
@@ -906,6 +1141,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                     <Text
                                         text={`${(room.dimension.length_ft * room.dimension.breadth_ft).toFixed(2)} sq ft`}
                                         fontSize={12}
+                                        opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
                                         fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                         padding={4}     // Adjust horizontal alignment if needed
                                     />
@@ -914,6 +1150,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                     <Text
                                         text={`${room.dimension.ceilingHeight_ft.toFixed(2)} ft`}
                                         fontSize={12}
+                                        opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
                                         fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                         padding={4}     // Adjust horizontal alignment if needed
                                     />
@@ -929,6 +1166,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                 y={windoor.pos.y}
                                                 width={windoor.pos.length}
                                                 height={windoor.pos.breadth}
+                                                opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
                                                 stroke={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                                 strokeWidth={1}
                                                 listening={false}
@@ -937,6 +1175,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                 <Text
                                                     text={windoor.id}
                                                     fontSize={10}
+                                                    opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
                                                     fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                                     padding={0}
                                                     fontStyle='bold'   // Adjust horizontal alignment if needed
@@ -952,6 +1191,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                 <Text
                                                     text={`${windoor.dimension.length_ft.toFixed(2)} ft x \n ${windoor.dimension.height_ft.toFixed(2)} ft`}
                                                     fontSize={10}
+                                                    opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
                                                     fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                                     padding={0}
                                                     fontStyle='bold'   // Adjust horizontal alignment if needed
@@ -1012,7 +1252,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                 listening={false}
                             />
                         )}
-                        {/* <Transformer
+                        <Transformer
                             ref={transformerRef}
                             rotateEnabled={false} // or true if needed
                             anchorSize={6}
@@ -1021,7 +1261,11 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                 if (newBox.width < 10 || newBox.height < 10) return oldBox;
                                 return newBox;
                             }}
-                        /> */}
+                            onTransformEnd={(e) => {
+                                // Prevent this from interfering with selection
+                                e.cancelBubble = true;
+                            }}
+                        />
                     </Layer>
                 }
             </Stage>

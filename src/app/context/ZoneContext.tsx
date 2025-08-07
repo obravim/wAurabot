@@ -23,6 +23,7 @@ export type Room = {
     dimension: { length_ft: number, breadth_ft: number, ceilingHeight_ft: number },
     children: string[],
     expanded: boolean,
+    dragStartPos?: { x: number; y: number };
 }
 
 export type Zone = {
