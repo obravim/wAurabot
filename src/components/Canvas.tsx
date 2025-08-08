@@ -7,6 +7,7 @@ import { DEFAULT_WINDOW_BREADTH, getRoomFromCoords, getWinDoorFromCoords, isItNe
 import { useStep } from '@/app/context/StepContext';
 import { useCanvas } from '@/app/context/CanvasContext';
 import { useZone, Zone, ZoneData, Room, WinDoor } from '@/app/context/ZoneContext';
+import EditModel, { EditModelDataType, NAME_REGEX } from './EditModel'
 
 export type CanvasHandle = {
     zoomStage: (direction: "in" | "out", scaleFactor: number) => void;
@@ -828,6 +829,109 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
         }
     };
 
+    const [editModelOpen, setEditModelOpen] = useState(false);
+    const editModelData = useRef<EditModelDataType>({ itemId: "", breadth: 0, height: 0, length: 0, isRoom: true, name: "Input", isZone: false })
+
+    function openModel(data: EditModelDataType) {
+            console.log("Opening edit model for:", data); // Debug log
+            editModelData.current = data;
+            setEditModelOpen(true)
+    }
+
+    function closeModel() {
+        setEditModelOpen(false)
+    }
+    
+        function editValues(data: EditModelDataType) {
+            setZoneData(prev => {
+                if (data.isZone) {
+                    const updatedZones = [...prev.zones];
+    
+                    const zoneIndex = updatedZones.findIndex(zone => zone.id == data.itemId);
+                    if (zoneIndex == -1) return prev;
+                    const newZone = { ...updatedZones[zoneIndex] }
+                    newZone.name = data.name
+                    updatedZones[zoneIndex] = newZone
+    
+                    return {
+                        ...prev,
+                        zones: updatedZones,
+                    };
+                } else if (data.isRoom) {
+                    const updatedRooms = new Map(prev.rooms);
+                    const room = updatedRooms.get(data.itemId);
+                    if (!room) return prev;
+    
+                    updatedRooms.set(data.itemId, {
+                        ...room,
+                        name: data.name,
+                        dimension: {
+                            length_ft: data.length,
+                            breadth_ft: data.breadth ?? 0,
+                            ceilingHeight_ft: data.height,
+                        },
+                        pos: {
+                            ...room.pos,
+                            length: data.length * 12 / (scaleFactor * resizeFactor),
+                            breadth: data.breadth ? data.breadth * 12 / (scaleFactor * resizeFactor) : room.pos.breadth
+                        }
+                    });
+                    return {
+                        ...prev,
+                        rooms: updatedRooms,
+                    };
+                } else {
+                    const updatedWindoors = new Map(prev.windoors);
+                    const windoor = updatedWindoors.get(data.itemId);
+                    if (!windoor) return prev;
+                    const room = prev.rooms.get(windoor.roomId)
+                    if (!room) return prev;
+                    let length = Math.round(data.length * 12 / (scaleFactor * resizeFactor));
+                    let breadth = Math.round(data.length * 12 / (scaleFactor * resizeFactor));
+                    if (windoor.type === 'window') {
+                        if (windoor.horizontal) {
+                            let maxLength = room.pos.x + room.pos.length - windoor.pos.x
+                            length = Math.min(maxLength, length);
+                            breadth = windoor.pos.breadth
+                        } else {
+                            let maxLength = room.pos.y + room.pos.breadth - windoor.pos.y
+                            breadth = Math.min(maxLength, length);
+                            length = windoor.pos.length
+                        }
+                    } else {
+                        if (windoor.horizontal) {
+                            let maxLength = room.pos.x + room.pos.length - windoor.pos.x
+                            maxLength = Math.min(maxLength, MAX_DOOR_SIZE)
+                            length = Math.min(maxLength, length);
+                            breadth = length
+                        } else {
+                            let maxLength = room.pos.y + room.pos.breadth - windoor.pos.y
+                            maxLength = Math.min(maxLength, MAX_DOOR_SIZE)
+                            breadth = Math.min(maxLength, length);
+                            length = breadth
+                        }
+                    }
+                    updatedWindoors.set(data.itemId, {
+                        ...windoor,
+                        name: data.name,
+                        dimension: {
+                            length_ft: parseFloat((windoor.horizontal ? (length * scaleFactor * resizeFactor / 12) : (breadth * scaleFactor * resizeFactor / 12)).toPrecision(2)),
+                            height_ft: data.height,
+                        },
+                        pos: {
+                            ...windoor.pos,
+                            length: length,
+                            breadth: breadth
+                        }
+                    });
+                    return {
+                        ...prev,
+                        windoors: updatedWindoors,
+                    };
+                }
+            });
+            setEditModelOpen(false)
+        }
     
     return (
         <div style={{ cursor: cursor }}>
@@ -945,10 +1049,29 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                     y={roomRect.y}
                                     width={roomRect.length}
                                     height={roomRect.breadth}
-                                    opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
+                                    opacity={anySelected ? (room.selected ? 1 : 0.4) : 1 && (room.zone && room.zoneColor) ? 0.4 : 1}
                                     stroke={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                     strokeWidth={room.selected ? 3 : 2}
                                     draggable={room.selected}
+                                    listening={true}
+                                    onContextMenu={(e) => {
+                                        const stage = e.target.getStage();
+                                        if (stage) {
+                                            // Prevent default browser context menu
+                                            e.evt.preventDefault();
+                                            // Stop event from bubbling up
+                                            e.evt.stopPropagation();
+                                            openModel({
+                                                itemId: room.id,
+                                                name: room.name,
+                                                isZone: false,
+                                                isRoom: true,
+                                                length: room.dimension.length_ft,
+                                                breadth: room.dimension.breadth_ft,
+                                                height: room.dimension.ceilingHeight_ft
+                                            });
+                                        }
+                                    }}
                                     // onDragStart={() => {               
                                     //     // Bring to front when dragging starts
                                     //     const node = roomNodeRefs.current.get(room.id);
@@ -1322,8 +1445,9 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                 y={windoor.pos.y}
                                                 width={windoor.pos.length}
                                                 height={windoor.pos.breadth}
-                                                opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
-                                                stroke={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
+                                                fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
+                                                opacity={anySelected ? (room.selected ? 1 : 0.4) : 1 && (room.zone && room.zoneColor) ? 0.4 : 1}
+                                                stroke={room.selected ? 'gold' : room.zone && room.zoneColor ? 'black' : 'black'}
                                                 strokeWidth={1}
                                                 listening={false}
                                             />
@@ -1331,8 +1455,8 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                 <Text
                                                     text={windoor.id}
                                                     fontSize={10}
-                                                    opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
-                                                    fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
+                                                    opacity={anySelected ? (room.selected ? 1 : 0.4) : 1 && (room.zone && room.zoneColor) ? 0.4 : 1}
+                                                    fill={room.selected ? 'black' : room.zone && room.zoneColor ? 'black' : 'black'}
                                                     padding={0}
                                                     fontStyle='bold'   // Adjust horizontal alignment if needed
                                                 />
@@ -1618,6 +1742,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                     </Layer>
                 }
             </Stage>
+            <EditModel open={editModelOpen} data={editModelData.current} onClose={closeModel} onSave={editValues} />
         </div >
     )
 });
