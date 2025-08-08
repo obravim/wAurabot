@@ -535,7 +535,7 @@ export default function EditZone() {
                                                         >
                                                             <p className='text-sm font-medium text-[#873EFD]'>{zone.name}</p>
                                                             <div className='flex items-center gap-2'>
-                                                                <button onClick={() => deleteZoneById(zone.id)}><Trash size={14} color={"#873EFD"} /></button>
+                                                                <button onClick={() => deleteZoneById(zone.id)}><EraserIcon size={14} color={"#873EFD"} /></button>
                                                                 <button
                                                                     onClick={(e) => { e.stopPropagation(); openModel({ itemId: zone.id, name: zone.name, isZone: true, isRoom: false, length: 0, breadth: 0, height: 0 }) }}
                                                                 ><EditIcon size={14} color={"#873EFD"} /></button>
@@ -631,7 +631,7 @@ export default function EditZone() {
                                                     >
                                                         <p className='text-sm font-medium'>{zone.name}</p>
                                                         <div className='flex items-center gap-2'>
-                                                            <button onClick={() => deleteZoneById(zone.id)}><Trash size={14} /></button>
+                                                            <button onClick={() => deleteZoneById(zone.id)}><EraserIcon size={14} /></button>
                                                             <button
                                                                 onClick={(e) => { e.stopPropagation(); openModel({ itemId: zone.id, name: zone.name, isZone: true, isRoom: false, length: 0, breadth: 0, height: 0 }) }}
                                                             ><EditIcon size={14} /></button>
