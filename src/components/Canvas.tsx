@@ -70,7 +70,9 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const stageRef = useRef<Konva.Stage>(null);
     const layerRef = useRef<Konva.Layer>(null);
     const transformerRef = useRef<Konva.Transformer>(null);
+    const windoorTransformerRef = useRef<Konva.Transformer>(null);
     const roomNodeRefs = useRef<Map<string, Konva.Rect>>(new Map());
+    const windoorNodeRefs = useRef<Map<string, Konva.Rect>>(new Map());
     const isDragging = useRef(false);
     const lastPos = useRef<{ x: number; y: number } | null>(null);
     const lastDist = useRef<number | null>(null);
@@ -84,25 +86,107 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const { scaleFactor, resizeFactor, setResizeFactor } = useCanvas();
     const [newRect, setNewRect] = useState<RectCoord | null>(null);
     const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+    const [selectedWindoorId, setSelectedWindoorId] = useState<string | null>(null);
     const { zoneData, setZoneData, multiSelect } = useZone();
     const zoneDataRef = useRef<ZoneData>({ zones: [], orphanRoomIds: [], rooms: new Map<string, Room>(), windoors: new Map<string, WinDoor>() });
     const [cursor, setCursor] = useState<'grabbing' | 'crosshair' | 'auto'>('auto');
+    const [windoorEnabledAnchors, setWindoorEnabledAnchors] = useState<string[]>(['middle-left', 'middle-right']);
+    const windoorDragStartRef = useRef<Map<string, { x: number; y: number; wall: 'top' | 'bottom' | 'left' | 'right' }>>(new Map());
+
+    // Helpers for windoor interactions
+    function getRoomForWindoor(windoorId: string) {
+        const windoor = zoneDataRef.current.windoors.get(windoorId);
+        if (!windoor) return null;
+        const room = zoneDataRef.current.rooms.get(windoor.roomId);
+        return room || null;
+    }
+
+    function getAnchoredWallForWindoor(windoorId: string): 'top' | 'bottom' | 'left' | 'right' {
+        const windoor = zoneDataRef.current.windoors.get(windoorId);
+        if (!windoor) return 'top';
+        const room = getRoomForWindoor(windoorId);
+        if (!room) return 'top';
+        const r = room.pos;
+        const w = windoor.pos;
+        if (windoor.horizontal) {
+            const distTop = Math.abs(w.y - r.y);
+            const distBottom = Math.abs((w.y + w.breadth) - (r.y + r.breadth));
+            return distTop <= distBottom ? 'top' : 'bottom';
+        } else {
+            const distLeft = Math.abs(w.x - r.x);
+            const distRight = Math.abs((w.x + w.length) - (r.x + r.length));
+            return distLeft <= distRight ? 'left' : 'right';
+        }
+    }
+
+    function clampWindoorPosToRoom(_windoorId: string, desired: { x: number; y: number }): { x: number; y: number } {
+        // Border restrictions removed: allow free movement (overlap prevention handled elsewhere)
+        return desired;
+    }
+
+    function rectsOverlap(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) {
+        return !(
+            a.x + a.w <= b.x ||
+            b.x + b.w <= a.x ||
+            a.y + a.h <= b.y ||
+            b.y + b.h <= a.y
+        );
+    }
+
+    function wouldOverlapSiblings(windoorId: string, next: { x: number; y: number; length: number; breadth: number }) {
+        const windoor = zoneDataRef.current.windoors.get(windoorId);
+        const room = windoor ? zoneDataRef.current.rooms.get(windoor.roomId) : null;
+        if (!windoor || !room) return false;
+        const siblings = room.children.filter(id => id !== windoorId);
+        const nextRect = { x: next.x, y: next.y, w: next.length, h: next.breadth };
+        for (const sibId of siblings) {
+            const sib = zoneDataRef.current.windoors.get(sibId);
+            if (!sib) continue;
+            const sibRect = { x: sib.pos.x, y: sib.pos.y, w: sib.pos.length, h: sib.pos.breadth };
+            if (rectsOverlap(nextRect, sibRect)) return true;
+        }
+        return false;
+    }
 
     useEffect(() => {
+        // Attach room transformer to selected rooms
         if (transformerRef.current) {
-            const selectedNodes = Array.from(zoneData.rooms.values())
-                .filter(room => room.selected)
+            const selectedRooms = Array.from(zoneData.rooms.values()).filter(r => r.selected);
+            const selectedRoomNodes = selectedRooms
                 .map(room => roomNodeRefs.current.get(room.id))
                 .filter(Boolean) as Konva.Rect[];
-            
-            transformerRef.current.nodes(selectedNodes);
+
+            transformerRef.current.nodes(selectedRoomNodes);
             transformerRef.current.getLayer()?.batchDraw();
+
+            // Keep windoors of selected rooms above the room rects for hit testing
+            selectedRooms.forEach(room => {
+                room.children.forEach(childId => {
+                    const childNode = windoorNodeRefs.current.get(childId);
+                    childNode?.moveToTop();
+                });
+            });
+            layerRef.current?.batchDraw();
         }
-    }, [zoneData.rooms, selectedRoomId, multiSelect]);
+
+        // Attach windoor transformer when a windoor is selected
+        if (windoorTransformerRef.current) {
+            const node = selectedWindoorId ? windoorNodeRefs.current.get(selectedWindoorId) : null;
+            if (node) {
+                windoorTransformerRef.current.nodes([node]);
+                node.moveToTop();
+                layerRef.current?.batchDraw();
+            } else {
+                windoorTransformerRef.current.nodes([]);
+            }
+            windoorTransformerRef.current.getLayer()?.batchDraw();
+        }
+    }, [zoneData.rooms, selectedRoomId, multiSelect, selectedWindoorId]);
 
     useEffect(() => {
         if (multiSelect) {
             setSelectedRoomId(null);
+            setSelectedWindoorId(null);
             setDrawWindoorEnabled(false);
             setCursor('auto')
             setDrawRect('none')
@@ -111,6 +195,17 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
             setDrawWindoorEnabled(selectedRoomId != null)
         }
     }, [multiSelect, selectedRoomId])
+
+    useEffect(() => {
+        if (!selectedWindoorId) {
+            setWindoorEnabledAnchors(['middle-left', 'middle-right']);
+            return;
+        }
+        const wd = zoneDataRef.current.windoors.get(selectedWindoorId);
+        if (!wd) return;
+        if (wd.horizontal) setWindoorEnabledAnchors(['middle-left', 'middle-right']);
+        else setWindoorEnabledAnchors(['top-center', 'bottom-center']);
+    }, [selectedWindoorId]);
 
     useEffect(() => {
         zoneDataRef.current = zoneData;
@@ -131,6 +226,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
         setHoverPos(null);
         setNewLine(null);
         setSelectedRoomId(null)
+        setSelectedWindoorId(null)
         setCursor('auto')
         setDrawRect('none')
         newLineRef.current = null;
@@ -1027,8 +1123,12 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                         }).map(roomId => {
                             const room = zoneData.rooms.get(roomId);
                             if (!room) return null;
-
                             const anySelected = Array.from(zoneData.rooms.values()).some(r => r.selected);
+                            const childSelected = !!selectedWindoorId;
+                            const parentIdOfSelectedChild = childSelected ? zoneData.windoors.get(selectedWindoorId!)?.roomId : null;
+                            const roomOpacity = childSelected
+                                ? (room.id === parentIdOfSelectedChild ? 1 : 0.5)
+                                : (anySelected ? (room.selected ? 1 : 0.5) : 1);
                             const roomRect = room.pos
 
                             return <React.Fragment key={room.id}>
@@ -1037,11 +1137,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                     ref={(node) => {
                                         if (node) {
                                             roomNodeRefs.current.set(room.id, node);
-                                            if (room.selected) {
-                                                node.moveToTop();
-                                            }
-                                        }
-                                        else { 
+                                        } else {
                                             roomNodeRefs.current.delete(room.id);
                                         }
                                     }}
@@ -1049,7 +1145,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                     y={roomRect.y}
                                     width={roomRect.length}
                                     height={roomRect.breadth}
-                                    opacity={anySelected ? (room.selected ? 1 : 0.4) : 1 && (room.zone && room.zoneColor) ? 0.4 : 1}
+                                    opacity={roomOpacity}
                                     stroke={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                     strokeWidth={room.selected ? 3 : 2}
                                     draggable={room.selected}
@@ -1285,8 +1381,14 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                             setZoneData(unSelectRooms);
                                         }
                                         setSelectedRoomId(room.id);
-                                        const node = e.target;
+                                        setSelectedWindoorId(null);
+                                        const node = e.target as Konva.Rect;
                                         node.moveToTop();
+                                        // ensure children stay above the room rect
+                                        room.children.forEach(childId => {
+                                            const childNode = windoorNodeRefs.current.get(childId);
+                                            childNode?.moveToTop();
+                                        });
                                         layerRef.current?.batchDraw();
                                     }}
                                     onTransformEnd={(e) => {
@@ -1397,39 +1499,39 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                         }, 0);
                                     }}
                                 />
-                                <Label key={room.id + "_label"} x={roomRect.x + roomRect.length / 2 - 20} y={roomRect.y + roomRect.breadth / 2 - 20} /*roomRect.y + roomRect.height} */>
+                                <Label key={room.id + "_label"} x={roomRect.x + roomRect.length / 2 - 20} y={roomRect.y + roomRect.breadth / 2 - 20} listening={false} /*roomRect.y + roomRect.height} */>
                                     <Text
                                         text={room.name}
                                         fontSize={14}
-                                        opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
+                                        opacity={roomOpacity}
                                         fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                         padding={0}
                                         fontStyle='bold'   // Adjust horizontal alignment if needed
                                     />
                                 </Label>
-                                <Label key={room.id + "_dimen"} x={roomRect.x + roomRect.length / 2 - getWordSize(`${room.dimension.length_ft.toFixed(2)} * ${room.dimension.breadth_ft.toFixed(2)} ft`, 5) / 2} y={roomRect.y + roomRect.breadth / 2 - 10}>
+                                <Label key={room.id + "_dimen"} x={roomRect.x + roomRect.length / 2 - getWordSize(`${room.dimension.length_ft.toFixed(2)} * ${room.dimension.breadth_ft.toFixed(2)} ft`, 5) / 2} y={roomRect.y + roomRect.breadth / 2 - 10} listening={false}>
                                     <Text
                                         text={`${room.dimension.length_ft.toFixed(2)} * ${room.dimension.breadth_ft.toFixed(2)} ft`}
                                         fontSize={12}
-                                        opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
+                                        opacity={roomOpacity}
                                         fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                         padding={4}     // Adjust horizontal alignment if needed
                                     />
                                 </Label>
-                                <Label key={room.id + "_area"} x={roomRect.x + roomRect.length / 2 - getWordSize(`${(room.dimension.length_ft * room.dimension.breadth_ft).toFixed(2)} sq ft`, 5) / 2} y={roomRect.y + roomRect.breadth / 2 + 2}>
+                                <Label key={room.id + "_area"} x={roomRect.x + roomRect.length / 2 - getWordSize(`${(room.dimension.length_ft * room.dimension.breadth_ft).toFixed(2)} sq ft`, 5) / 2} y={roomRect.y + roomRect.breadth / 2 + 2} listening={false}>
                                     <Text
                                         text={`${(room.dimension.length_ft * room.dimension.breadth_ft).toFixed(2)} sq ft`}
                                         fontSize={12}
-                                        opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
+                                        opacity={roomOpacity}
                                         fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                         padding={4}     // Adjust horizontal alignment if needed
                                     />
                                 </Label>
-                                <Label key={room.id + "_height"} x={roomRect.x + roomRect.length / 2 - getWordSize(`${room.dimension.ceilingHeight_ft.toFixed(2)} ft`, 5) / 2} y={roomRect.y + roomRect.breadth / 2 + 14}>
+                                <Label key={room.id + "_height"} x={roomRect.x + roomRect.length / 2 - getWordSize(`${room.dimension.ceilingHeight_ft.toFixed(2)} ft`, 5) / 2} y={roomRect.y + roomRect.breadth / 2 + 14} listening={false}>
                                     <Text
                                         text={`${room.dimension.ceilingHeight_ft.toFixed(2)} ft`}
                                         fontSize={12}
-                                        opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
+                                        opacity={roomOpacity}
                                         fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                         padding={4}     // Adjust horizontal alignment if needed
                                     />
@@ -1438,24 +1540,146 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                     room.children.map(windoorId => {
                                         const windoor = zoneData.windoors.get(windoorId);
                                         if (!windoor) return null;
+                                        const windoorOpacity = !!selectedWindoorId
+                                            ? (windoor.roomId === parentIdOfSelectedChild ? 1 : 0.5)
+                                            : (anySelected ? (room.selected ? 1 : 0.5) : 1);
                                         return <React.Fragment key={windoor.id} >
                                             <Rect
                                                 key={windoor.id}
+                                                id={windoor.id}
+                                                ref={(node) => {
+                                                    if (node) windoorNodeRefs.current.set(windoor.id, node);
+                                                    else windoorNodeRefs.current.delete(windoor.id);
+                                                }}
                                                 x={windoor.pos.x}
                                                 y={windoor.pos.y}
                                                 width={windoor.pos.length}
                                                 height={windoor.pos.breadth}
-                                                fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
-                                                opacity={anySelected ? (room.selected ? 1 : 0.4) : 1 && (room.zone && room.zoneColor) ? 0.4 : 1}
-                                                stroke={room.selected ? 'gold' : room.zone && room.zoneColor ? 'black' : 'black'}
+                                                 hitStrokeWidth={20}
+                                                fill={(selectedWindoorId === windoor.id) ? 'gold' : (room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke)}
+                                                opacity={windoorOpacity}
+                                                stroke={(selectedWindoorId === windoor.id) ? 'gold' : (room.selected ? 'gold' : 'black')}
                                                 strokeWidth={1}
-                                                listening={false}
+                                                listening={true}
+                                                draggable={true}
+                                                dragBoundFunc={(pos) => {
+                                                    // Constrain movement to wall axis and room bounds; prevent overlap
+                                                    const clamped = clampWindoorPosToRoom(windoor.id, pos);
+                                                    const next = { x: clamped.x, y: clamped.y, length: windoor.pos.length, breadth: windoor.pos.breadth };
+                                                    if (wouldOverlapSiblings(windoor.id, next)) {
+                                                        // Reject overlap by staying at current state position
+                                                        return { x: windoor.pos.x, y: windoor.pos.y };
+                                                    }
+                                                    return clamped;
+                                                }}
+                                                onDragStart={(e) => {
+                                                    e.cancelBubble = true;
+                                                    setSelectedWindoorId(windoor.id);
+                                                    // Store wall used during this drag
+                                                    windoorDragStartRef.current.set(windoor.id, {
+                                                        x: windoor.pos.x,
+                                                        y: windoor.pos.y,
+                                                        wall: getAnchoredWallForWindoor(windoor.id)
+                                                    });
+                                                    // bring to top
+                                                    const node = windoorNodeRefs.current.get(windoor.id);
+                                                    node?.moveToTop();
+                                                    layerRef.current?.batchDraw();
+                                                }}
+                                                onDragMove={(e) => {
+                                                    e.cancelBubble = true;
+                                                    const node = e.target as Konva.Rect;
+                                                    const clamped = clampWindoorPosToRoom(windoor.id, { x: node.x(), y: node.y() });
+                                                    const next = { x: clamped.x, y: clamped.y, length: windoor.pos.length, breadth: windoor.pos.breadth };
+                                                    if (wouldOverlapSiblings(windoor.id, next)) {
+                                                        // Restore node to previous state visual
+                                                        node.x(windoor.pos.x);
+                                                        node.y(windoor.pos.y);
+                                                        return;
+                                                    }
+                                                    // Update state live for better feedback
+                                                    setZoneData(prev => {
+                                                        const wd = prev.windoors.get(windoor.id);
+                                                        if (!wd) return prev;
+                                                        const newWindoors = new Map(prev.windoors);
+                                                        newWindoors.set(windoor.id, { ...wd, pos: { ...wd.pos, x: clamped.x, y: clamped.y } });
+                                                        return { ...prev, windoors: newWindoors };
+                                                    });
+                                                }}
+                                                onDragEnd={(e) => {
+                                                    e.cancelBubble = true;
+                                                    const node = e.target as Konva.Rect;
+                                                    const clamped = clampWindoorPosToRoom(windoor.id, { x: node.x(), y: node.y() });
+                                                    const next = { x: clamped.x, y: clamped.y, length: windoor.pos.length, breadth: windoor.pos.breadth };
+                                                    if (wouldOverlapSiblings(windoor.id, next)) {
+                                                        // Revert to prior
+                                                        node.x(windoor.pos.x);
+                                                        node.y(windoor.pos.y);
+                                                        return;
+                                                    }
+                                                    setZoneData(prev => {
+                                                        const wd = prev.windoors.get(windoor.id);
+                                                        if (!wd) return prev;
+                                                        const newWindoors = new Map(prev.windoors);
+                                                        newWindoors.set(windoor.id, { ...wd, pos: { ...wd.pos, x: clamped.x, y: clamped.y } });
+                                                        return { ...prev, windoors: newWindoors };
+                                                    });
+                                                    // ensure selected node stays bound to transformer
+                                                    const selected = windoorNodeRefs.current.get(windoor.id);
+                                                    if (selected && windoorTransformerRef.current) {
+                                                        windoorTransformerRef.current.nodes([selected]);
+                                                        selected.moveToTop();
+                                                        layerRef.current?.batchDraw();
+                                                    }
+                                                }}
+                                                onMouseDown={(e) => {
+                                                    e.cancelBubble = true;
+                                                    // Selecting a windoor deselects rooms for transformer clarity
+                                                    setZoneData(unSelectRooms);
+                                                    setSelectedRoomId(null);
+                                                    setSelectedWindoorId(windoor.id);
+                                                     const node = windoorNodeRefs.current.get(windoor.id);
+                                                     if (node && windoorTransformerRef.current) {
+                                                         windoorTransformerRef.current.nodes([node]);
+                                                         node.moveToTop();
+                                                         layerRef.current?.batchDraw();
+                                                     }
+                                                }}
+                                                 onClick={(e) => {
+                                                     e.cancelBubble = true;
+                                                     setZoneData(unSelectRooms);
+                                                     setSelectedRoomId(null);
+                                                     setSelectedWindoorId(windoor.id);
+                                                 }}
+                                                 onTap={(e) => {
+                                                     e.cancelBubble = true;
+                                                     setZoneData(unSelectRooms);
+                                                     setSelectedRoomId(null);
+                                                     setSelectedWindoorId(windoor.id);
+                                                 }}
+                                                onContextMenu={(e) => {
+                                                    const stage = e.target.getStage();
+                                                    if (stage) {
+                                                        e.evt.preventDefault();
+                                                        e.evt.stopPropagation();
+                                                        setSelectedWindoorId(windoor.id);
+                                                        openModel({
+                                                            itemId: windoor.id,
+                                                            name: windoor.name,
+                                                            isZone: false,
+                                                            isRoom: false,
+                                                            length: windoor.dimension.length_ft,
+                                                            breadth: 0,
+                                                            height: windoor.dimension.height_ft
+                                                        });
+                                                    }
+                                                }}
                                             />
-                                            <Label key={windoor.id + "_label"} x={windoor.pos.x + windoor.pos.length / 2 - 6} y={windoor.pos.y + windoor.pos.breadth / 2 - (windoor.type == 'window' ? 4 : 15)} >
+                                            <Label key={windoor.id + "_label"} x={windoor.pos.x + windoor.pos.length / 2 - 6} y={windoor.pos.y + windoor.pos.breadth / 2 - (windoor.type == 'window' ? 4 : 15)} listening={false}>
                                                 <Text
                                                     text={windoor.id}
                                                     fontSize={10}
-                                                    opacity={anySelected ? (room.selected ? 1 : 0.4) : 1 && (room.zone && room.zoneColor) ? 0.4 : 1}
+                                                    opacity={windoorOpacity}
                                                     fill={room.selected ? 'black' : room.zone && room.zoneColor ? 'black' : 'black'}
                                                     padding={0}
                                                     fontStyle='bold'   // Adjust horizontal alignment if needed
@@ -1467,11 +1691,12 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                 }
                                                 y={windoor.type == 'window' ? windoor.horizontal ? windoor.pos.y + windoor.pos.breadth + 2 : windoor.pos.y + windoor.pos.breadth / 2 - 10
                                                     : windoor.pos.y + windoor.pos.breadth / 2 - 5
-                                                }>
+                                                }
+                                                listening={false}>
                                                 <Text
                                                     text={`${windoor.dimension.length_ft.toFixed(2)} ft x \n ${windoor.dimension.height_ft.toFixed(2)} ft`}
                                                     fontSize={10}
-                                                    opacity={anySelected ? (room.selected ? 1 : 0.4) : 1}
+                                                    opacity={windoorOpacity}
                                                     fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                                     padding={0}
                                                     fontStyle='bold'   // Adjust horizontal alignment if needed
@@ -1532,20 +1757,6 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                 listening={false}
                             />
                         )}
-                        {/* <Transformer
-                            ref={transformerRef}
-                            rotateEnabled={false} // or true if needed
-                            anchorSize={6}
-                            boundBoxFunc={(oldBox, newBox) => {
-                                // Optional: prevent shrinking too small
-                                if (newBox.width < 10 || newBox.height < 10) return oldBox;
-                                return newBox;
-                            }}
-                            onTransformEnd={(e) => {
-                                // Prevent this from interfering with selection
-                                e.cancelBubble = true;
-                            }}
-                        /> */}
                         <Transformer
                             ref={transformerRef}
                             rotateEnabled={false}
@@ -1737,6 +1948,100 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                         transformerRef.current.getLayer()?.batchDraw();
                                     }
                                 }, 0);
+                            }}
+                        />
+                        {/* Transformer for windoors */}
+                        <Transformer
+                            ref={windoorTransformerRef}
+                            rotateEnabled={false}
+                            anchorSize={6}
+                            enabledAnchors={windoorEnabledAnchors}
+                            ignoreStroke={true}
+                            boundBoxFunc={(oldBox, newBox) => {
+                                const id = selectedWindoorId || (windoorTransformerRef.current?.nodes()[0]?.id?.() as string | undefined);
+                                if (!id) return oldBox;
+                                const wd = zoneDataRef.current.windoors.get(id);
+                                if (!wd) return oldBox;
+                                const room = getRoomForWindoor(id);
+                                if (!room) return oldBox;
+
+                                // Minimum size
+                                let width = Math.max(6, newBox.width);
+                                let height = Math.max(6, newBox.height);
+                                let x = newBox.x;
+                                let y = newBox.y;
+
+                                if (wd.type === 'window') {
+                                    if (wd.horizontal) {
+                                        height = wd.pos.breadth;
+                                        // remove border lock: keep proposed y
+                                    } else {
+                                        width = wd.pos.length;
+                                        // remove border lock: keep proposed x
+                                    }
+                                } else {
+                                    const sizePx = Math.min(Math.max(width, height), MAX_DOOR_SIZE);
+                                    width = sizePx;
+                                    height = sizePx;
+                                    // remove border lock: keep proposed x/y
+                                }
+
+                                // Border restrictions removed: do not clamp to room
+
+                                const proposed = { x, y, length: width, breadth: height };
+                                if (wouldOverlapSiblings(id, proposed)) return oldBox;
+                                return { ...newBox, x, y, width, height };
+                            }}
+                            onTransformEnd={() => {
+                                const node = windoorTransformerRef.current?.nodes()[0] as Konva.Rect | undefined;
+                                if (!node) return;
+                                const id = node.id() as string;
+                                const wd = zoneDataRef.current.windoors.get(id);
+                                const room = wd ? zoneDataRef.current.rooms.get(wd.roomId) : null;
+                                if (!wd || !room) return;
+
+                                let newW = Math.max(6, node.width() * node.scaleX());
+                                let newH = Math.max(6, node.height() * node.scaleY());
+                                let newX = node.x();
+                                let newY = node.y();
+
+                                if (wd.type === 'window') {
+                                    if (wd.horizontal) {
+                                        newH = wd.pos.breadth;
+                                    } else {
+                                        newW = wd.pos.length;
+                                    }
+                                } else {
+                                    const sizePx = Math.min(Math.max(newW, newH), MAX_DOOR_SIZE);
+                                    newW = sizePx;
+                                    newH = sizePx;
+                                    // remove border lock: keep proposed x/y
+                                }
+
+                                // Border restrictions removed: do not clamp to room
+
+                                const proposed = { x: newX, y: newY, length: newW, breadth: newH };
+                                if (wouldOverlapSiblings(id, proposed)) {
+                                    node.scaleX(1); node.scaleY(1);
+                                    return;
+                                }
+
+                                setZoneData(prev => {
+                                    const wdPrev = prev.windoors.get(id);
+                                    if (!wdPrev) return prev;
+                                    const newWindoors = new Map(prev.windoors);
+                                    newWindoors.set(id, {
+                                        ...wdPrev,
+                                        pos: { ...wdPrev.pos, x: newX, y: newY, length: newW, breadth: newH },
+                                        dimension: {
+                                            ...wdPrev.dimension,
+                                            length_ft: (wdPrev.horizontal ? (newW * (scaleFactor * resizeFactor) / 12) : (newH * (scaleFactor * resizeFactor) / 12))
+                                        }
+                                    });
+                                    return { ...prev, windoors: newWindoors };
+                                });
+
+                                node.scaleX(1); node.scaleY(1);
                             }}
                         />
                     </Layer>
