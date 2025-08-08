@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react'
 import Image from 'next/image'
 import Drag from './Icons/Drag'
 import WindowFrame from './Icons/WindowFrame'
-import { ChevronDown, DoorOpen, EditIcon, Search, Plus, Check, Delete, DeleteIcon, Trash, Cross, CrossIcon, X } from 'lucide-react'
+import { ChevronDown, DoorOpen, EditIcon, Search, Plus, Check, Delete, DeleteIcon, Trash, Cross, CrossIcon, X, EraserIcon } from 'lucide-react'
 import { useZone, ZoneData, Zone } from '@/app/context/ZoneContext'
 import EditModel, { EditModelDataType, NAME_REGEX } from './EditModel'
 import { unSelectRooms } from "./Canvas"
@@ -10,39 +10,42 @@ import { useCanvas } from '@/app/context/CanvasContext'
 import {
     DndContext,
     closestCenter,
-    useDroppable,
-    useDraggable,
     DragEndEvent,
     DragOverlay,
 } from '@dnd-kit/core';
-import {
-    SortableContext,
-    verticalListSortingStrategy,
-    useSortable,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
 import DraggableRoom from '@/wrappers/DraggableRoom'
 import DroppableZone from '@/wrappers/DroppableZone'
 import RoomPreview from './RoomPreview'
 import { MAX_DOOR_SIZE } from './EditView'
 import Droppable from '@/wrappers/Droppable'
+import { nanoid } from 'nanoid';
 
 function calculateTotalRoomArea(zoneData: ZoneData): number {
     let total = 0;
-
-    zoneData.rooms.forEach((room) => {
+    [
+        // Rooms inside zones
+        ...zoneData.zones.flatMap(zone => zone.roomIds),
+        // Orphan rooms
+        ...zoneData.orphanRoomIds
+    ].forEach((roomId) => {
+        const room = zoneData.rooms.get(roomId)
+        if (!room) return;
         total += room.dimension.length_ft * room.dimension.breadth_ft;
     });
     return total;
 }
 
 const COLORS = [
-    "#8B5CF6", // Violet
-    "#F43F5E", // Rose
-    "#06B6D4", // Cyan
-    "#64748B", // Slate Gray
-    "#F59E0B", // Amber
-    "#14B8A6", // Teal
+    "#763cff", // Violet
+    "#ff284c", // Rose
+    "#0ad7fc", // Cyan
+    "#ff6de7", // Slate Gray
+    "#ffa200", // Amber
+    "#b444ff", // Teal
+    "#3cff4c", // Violet
+    "#ffa88e", // Rose
+    "#f3ff47", // Cyan
+    "#5552ff", // Slate Gray
 ];
 
 export default function EditZone() {
@@ -69,13 +72,16 @@ export default function EditZone() {
             if (selectedRoomIds.length === 0) {
                 return;
             }
+            const id = nanoid()
+            const zonesLength = zoneData.zones.length
+            const lastIndex = zonesLength > 0 ? parseInt(zoneData.zones[zonesLength - 1].id.split("-")[0]) : -1
 
             const newZone: Zone = {
-                id: "zone" + (zoneData.zones.length + 1),
+                id: zoneData.zones.length + "-zone-" + id,
                 roomIds: selectedRoomIds,
-                color: COLORS[zoneData.zones.length % COLORS.length],
+                color: COLORS[lastIndex + 1 % COLORS.length],
                 expanded: false,
-                name: "Zone" + (zoneData.zones.length + 1)
+                name: "Zone" + (lastIndex + 2)
             };
 
             setZoneData(prev => {
@@ -262,44 +268,67 @@ export default function EditZone() {
     }
 
     function handleDragEnd(event: DragEndEvent) {
-        const activeId = event.active.id;
-        const overId = event.over?.id;
-        if (!overId || activeId === overId) return;
+        const { active, over } = event;
+        if (!over) return;
 
-        const activeRoomId = String(activeId).replace("room:", "");
-        const overRoomId = String(overId).startsWith("room:") ? String(overId).replace("room:", "") : null;
+        const activeRoomId = String(active.id).replace(/^room:/, "");
+        const overId = String(over.id);
 
-        const activeInZone = zoneData.zones.find(z => z.roomIds.includes(activeRoomId));
-        const overInZone = zoneData.zones.find(z => z.roomIds.includes(overRoomId || ""));
+        // determine target zone (null for orphan)
+        const overZoneId = (() => {
+            if (overId === "orphan") return null;
+            if (overId.startsWith("zone:")) return overId.replace("zone:", "");
+            if (overId.startsWith("room:")) {
+                const droppedRoomId = overId.replace("room:", "");
+                const zone = zoneData.zones.find(z => z.roomIds.includes(droppedRoomId));
+                return zone?.id ?? null;
+            }
+            return null;
+        })();
 
-        const activeZoneId = activeInZone?.id ?? null;
-        const overZoneId = overInZone?.id ?? null;
+        // original zone of the active room
+        const fromZoneId = zoneData.rooms.get(activeRoomId)?.zone ?? null;
 
         setZoneData(prev => {
             const rooms = new Map(prev.rooms);
             const room = rooms.get(activeRoomId);
             if (!room) return prev;
 
+            // prepare updated room object (update zone and zoneColor)
+            const updatedRooms = new Map(rooms);
+            const updatedRoom = { ...room };
+
+            if (overZoneId) {
+                const targetZone = prev.zones.find(z => z.id === overZoneId);
+                const zoneColor = targetZone?.color ?? null;
+                updatedRoom.zone = overZoneId;
+                updatedRoom.zoneColor = zoneColor;
+            } else {
+                // moved to orphan
+                updatedRoom.zone = null;
+                updatedRoom.zoneColor = null;
+            }
+
+            updatedRooms.set(activeRoomId, updatedRoom);
+
+            // Build new zones with removal of activeRoomId and insertion into target zone
             const zones = prev.zones.map(zone => {
-                let roomIds = [...zone.roomIds];
+                // remove the moved room from each zone first
+                let roomIds = zone.roomIds.filter(id => id !== activeRoomId);
 
-                // Remove from source zone
-                if (zone.id === activeZoneId) {
-                    roomIds = roomIds.filter(id => id !== activeRoomId);
-                }
-
-                // Add to target zone
                 if (zone.id === overZoneId) {
-                    roomIds = roomIds.filter(id => id !== activeRoomId); // Avoid duplicates
-
-                    if (overRoomId) {
-                        const index = roomIds.indexOf(overRoomId);
-                        if (index !== -1) {
-                            roomIds.splice(index, 0, activeRoomId);
+                    // If dropped on a room inside this zone, insert before that room
+                    if (overId.startsWith("room:")) {
+                        const overRoomId = overId.replace("room:", "");
+                        const insertAt = roomIds.indexOf(overRoomId);
+                        if (insertAt !== -1) {
+                            roomIds.splice(insertAt, 0, activeRoomId);
                         } else {
+                            // fallback: append
                             roomIds.push(activeRoomId);
                         }
                     } else {
+                        // dropped on zone header (zone:...), append to the end
                         roomIds.push(activeRoomId);
                     }
                 }
@@ -307,38 +336,49 @@ export default function EditZone() {
                 return { ...zone, roomIds };
             });
 
-            // Orphan logic
-            let orphanRoomIds = [...prev.orphanRoomIds];
-            orphanRoomIds = orphanRoomIds.filter(id => id !== activeRoomId);
+            // Rebuild orphan list: remove activeRoomId first
+            let orphanRoomIds = prev.orphanRoomIds.filter(id => id !== activeRoomId);
 
-            if (!overZoneId) {
-                if (overRoomId) {
-                    const index = orphanRoomIds.indexOf(overRoomId);
-                    if (index !== -1) {
-                        orphanRoomIds.splice(index, 0, activeRoomId);
+            if (overZoneId == null) {
+                // dropped to orphan area
+                if (overId.startsWith("room:")) {
+                    const overRoomId = overId.replace("room:", "");
+                    const insertAt = orphanRoomIds.indexOf(overRoomId);
+                    if (insertAt !== -1) {
+                        orphanRoomIds.splice(insertAt, 0, activeRoomId);
                     } else {
                         orphanRoomIds.push(activeRoomId);
                     }
                 } else {
+                    // dropped on orphan header -> append
                     orphanRoomIds.push(activeRoomId);
                 }
             }
 
-            // Update room stroke color based on location
-            const updatedRoom = {
-                ...room,
-                zoneColor: overZoneId
-                    ? zones.find(z => z.id === overZoneId)?.color ?? null
-                    : null,
-                zone: overZoneId
+            return {
+                ...prev,
+                rooms: updatedRooms,
+                zones,
+                orphanRoomIds,
             };
-            rooms.set(activeRoomId, updatedRoom);
+        });
+
+        setActiveId(null);
+    }
+
+    function deleteWindoorFromRoom(roomId: string, windoorId: string) {
+        setZoneData(prev => {
+            const updatedRooms = new Map(prev.rooms);
+            const room = updatedRooms.get(roomId);
+            if (!room) return prev;
+
+            // Remove the windoor ID from the children array
+            const updatedChildren = room.children.filter(id => id !== windoorId);
+            updatedRooms.set(roomId, { ...room, children: updatedChildren });
 
             return {
                 ...prev,
-                zones,
-                orphanRoomIds,
-                rooms,
+                rooms: updatedRooms,
             };
         });
     }
@@ -486,7 +526,7 @@ export default function EditZone() {
                             {
                                 dataToRender.zones ? dataToRender.zones.map((zone, index) => {
                                     return <DroppableZone key={zone.id} id={`zone:${zone.id}`}>
-                                        <div key={index} className=''>
+                                        <div key={zone.id} className=''>
                                             {
                                                 zone.expanded ?
                                                     <div className='cursor-auto flex flex-col gap-4'>
@@ -558,17 +598,24 @@ export default function EditZone() {
                                                                                                             </p>
                                                                                                         </div>
                                                                                                     </div>
-                                                                                                    <button className='flex items-center gap-1.5 text-xs cursor-pointer' style={{ color: zone.color }}
-                                                                                                        onClick={(e) => { e.stopPropagation(); openModel({ itemId: item.id, name: item.name, isZone: false, isRoom: false, length: item.dimension.length_ft, breadth: null, height: item.dimension.height_ft }) }}
-                                                                                                    >
-                                                                                                        <EditIcon size={12} color={zone.color} />
-                                                                                                        Edit
-                                                                                                    </button>
+                                                                                                    <div className='flex items-center gap-2.5'>
+                                                                                                        <button style={{ color: room.stroke }}
+                                                                                                            onClick={() => deleteWindoorFromRoom(room.id, item.id)}
+                                                                                                        >
+                                                                                                            <EraserIcon size={12} color={room.stroke} />
+                                                                                                        </button>
+                                                                                                        <button className='flex items-center gap-1.5 text-xs cursor-pointer' style={{ color: zone.color }}
+                                                                                                            onClick={(e) => { e.stopPropagation(); openModel({ itemId: item.id, name: item.name, isZone: false, isRoom: false, length: item.dimension.length_ft, breadth: null, height: item.dimension.height_ft }) }}
+                                                                                                        >
+                                                                                                            <EditIcon size={12} color={zone.color} />
+                                                                                                            Edit
+                                                                                                        </button>
+                                                                                                    </div>
                                                                                                 </div>
                                                                                             </div>
                                                                                         })
                                                                                     }
-                                                                                </div> : <div key={roomIndex} className='mx-6 hover:bg-[#333333] flex items-center justify-between cursor-pointer bg-[#1F1F1F] px-2 py-2 rounded-lg'
+                                                                                </div> : <div key={room.id} className='mx-6 hover:bg-[#333333] flex items-center justify-between cursor-pointer bg-[#1F1F1F] px-2 py-2 rounded-lg'
                                                                                     onClick={() => toggleRoomExpand(room.id)}
                                                                                 >
                                                                                     <p style={{ color: zone.color }} className='text-sm font-medium'>{room.name}</p>
@@ -660,18 +707,25 @@ export default function EditZone() {
                                                                                         </p>
                                                                                     </div>
                                                                                 </div>
-                                                                                <div className='flex items-center gap-1.5 text-xs cursor-pointer' style={{ color: room.stroke }}
-                                                                                    onClick={(e) => { e.stopPropagation(); openModel({ itemId: item.id, name: item.name, isZone: false, isRoom: false, length: item.dimension.length_ft, breadth: null, height: item.dimension.height_ft, }) }}
-                                                                                >
-                                                                                    <EditIcon size={12} color={room.stroke} />
-                                                                                    Edit
+                                                                                <div className='flex items-center gap-2.5'>
+                                                                                    <button style={{ color: room.stroke }}
+                                                                                        onClick={() => deleteWindoorFromRoom(room.id, item.id)}
+                                                                                    >
+                                                                                        <EraserIcon size={12} color={room.stroke} />
+                                                                                    </button>
+                                                                                    <button className='flex items-center gap-1 text-xs cursor-pointer' style={{ color: room.stroke }}
+                                                                                        onClick={(e) => { e.stopPropagation(); openModel({ itemId: item.id, name: item.name, isZone: false, isRoom: false, length: item.dimension.length_ft, breadth: null, height: item.dimension.height_ft, }) }}
+                                                                                    >
+                                                                                        <EditIcon size={12} color={room.stroke} />
+                                                                                        Edit
+                                                                                    </button>
                                                                                 </div>
                                                                             </div>
                                                                         </div>
                                                                     })
                                                                 }
                                                             </div>
-                                                            : <div key={roomIndex} className='mx-6 hover:bg-[#333333] flex items-center justify-between cursor-pointer bg-[#1F1F1F] px-2 py-2 rounded-lg'
+                                                            : <div key={room.id} className='mx-6 hover:bg-[#333333] flex items-center justify-between cursor-pointer bg-[#1F1F1F] px-2 py-2 rounded-lg'
                                                                 onClick={() => toggleRoomExpand(room.id)}
                                                             >
                                                                 <p style={{ color: room.stroke }} className='text-sm font-medium '>{room.name}</p>
@@ -698,7 +752,6 @@ export default function EditZone() {
                         <p>{calculateTotalRoomArea(zoneData).toFixed(2)} sq ft</p>
                     </div>
                 }
-
             </div>
             <div className='px-6 py-4 bg-[#262626] flex items-center justify-between cursor-pointer'>
                 <p className='text-lg font-medium'>Results</p>

@@ -7,6 +7,7 @@ import { DEFAULT_WINDOW_BREADTH, getRoomFromCoords, getWinDoorFromCoords, isItNe
 import { useStep } from '@/app/context/StepContext';
 import { useCanvas } from '@/app/context/CanvasContext';
 import { useZone, Zone, ZoneData, Room, WinDoor } from '@/app/context/ZoneContext';
+import { nanoid } from 'nanoid';
 
 export type CanvasHandle = {
     zoomStage: (direction: "in" | "out", scaleFactor: number) => void;
@@ -37,12 +38,7 @@ type Line = {
     points: number[];
 }
 
-type ImgDrawDetails = {
-    imgDrawWidth: number,
-    imgDrawHeight: number,
-    startX: number,
-    startY: number
-}
+
 
 function getWordSize(text: string, fontSize: number) {
     return text.length * (fontSize);
@@ -65,7 +61,6 @@ function distancePoints(pointA: Point, pointB: Point) {
 
 const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputModelOpen, setPixelDist, stageSize, drawRect, setDrawRect, setDrawWindoorEnabled }, ref) => {
     const { step } = useStep();
-    const [imgDrawDetails, setImgDrawDetails] = useState<ImgDrawDetails>();
     const stageRef = useRef<Konva.Stage>(null);
     const layerRef = useRef<Konva.Layer>(null);
     const isDragging = useRef(false);
@@ -78,7 +73,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const hoverPosRef = useRef<number[] | null>(null);
     const [dimText, setDimText] = useState<string>("");
     const isDrawing = useRef(false);
-    const { scaleFactor, resizeFactor, setResizeFactor } = useCanvas();
+    const { scaleFactor, resizeFactor, setResizeFactor, imgDrawDetails, setImgDrawDetails } = useCanvas();
     const [newRect, setNewRect] = useState<RectCoord | null>(null);
     const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     const { zoneData, setZoneData, multiSelect } = useZone();
@@ -410,7 +405,6 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 }
                 const room = zoneDataRef.current.rooms.get(selectedRoomId)
                 if (!room) return;
-                console.log(selectedRoomId);
                 if (!isItNear(pointer, room, drawRect === 'door' ? 30 : 20)) {
                     alert("Draw near the room's wall!");
                     return;
@@ -496,7 +490,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                     let breadth = Math.abs(clampedY - y1);
                     const room = zoneDataRef.current.rooms.get(selectedRoomId)
                     if (!room) return prev
-                    const wall = isItNear({ x: clampedX, y: clampedY }, room, 20)
+                    const wall = isItNear({ x: clampedX, y: clampedY }, room, drawRect == 'window' ? 20 : 30)
                     if (wall == null) return prev
                     if (wall == 'h') {
                         clampedX = Math.max(room.pos.x, Math.min(clampedX, room.pos.x + room.pos.length))
@@ -538,7 +532,8 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 if (drawRect === 'room') {
                     if (distancePoints(newRect.startPoint, newRect.endPoint) <= 5) return
                     const display = drawRect.charAt(0).toUpperCase() + drawRect.substring(1) + (zoneDataRef.current.rooms.size + 1)
-                    const tempRect = getRoomFromCoords({ roomCoords: newRect, id: drawRect.charAt(0).toUpperCase() + (zoneDataRef.current.rooms.size + 1), display, scaleFactor, selected: false, resizeFactor });
+                    const id = nanoid()
+                    const tempRect = getRoomFromCoords({ roomCoords: newRect, id: "R-" + id, display, scaleFactor, selected: false, resizeFactor });
                     if (drawRect == 'room') {
                         setZoneData(zoneData => {
                             const rooms = new Map(zoneData.rooms);
@@ -558,8 +553,9 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                     if (length * breadth < 100) return
                     const wall = isItNear({ x: x1 + length / 2, y: y1 + breadth / 2 }, room, drawRect === 'window' ? 20 : 30)
                     if (wall) {
-                        const id = drawRect.charAt(0).toUpperCase() + (zoneDataRef.current.windoors.size + 1);
-                        const display = drawRect.charAt(0).toUpperCase() + drawRect.substring(1) + (zoneDataRef.current.windoors.size + 1);
+                        const idToSet = nanoid()
+                        const id = drawRect.charAt(0).toUpperCase() + "-" + idToSet;
+                        const display = drawRect.charAt(0).toUpperCase() + (zoneDataRef.current.windoors.size + 1);
                         const tempWindoor = getWinDoorFromCoords(newRect, id, display, drawRect, scaleFactor, resizeFactor)
                         tempWindoor.roomId = room.id
                         tempWindoor.horizontal = wall == 'h'
@@ -935,7 +931,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                             />
                                             <Label key={windoor.id + "_label"} x={windoor.pos.x + windoor.pos.length / 2 - 6} y={windoor.pos.y + windoor.pos.breadth / 2 - (windoor.type == 'window' ? 4 : 15)} >
                                                 <Text
-                                                    text={windoor.id}
+                                                    text={windoor.name}
                                                     fontSize={10}
                                                     fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                                     padding={0}

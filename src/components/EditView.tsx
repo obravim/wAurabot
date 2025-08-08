@@ -6,6 +6,7 @@ import { useZone, Room, WinDoor, Zone, ZoneData } from '@/app/context/ZoneContex
 import Compass from './Compass';
 import Canvas, { CanvasHandle, RectCoord } from './Canvas';
 import WindowFrame from './Icons/WindowFrame'
+import { nanoid } from 'nanoid'
 
 const DEFAULT_CEILING_HEIGHT_FT = 10;
 const DEFAULT_WINDOW_HEIGHT_FT = 5;
@@ -149,16 +150,17 @@ export function forEachRoom(zoneData: ZoneData, callback: (room: Room) => void) 
 
 export function isItNear(point: { x: number, y: number }, room: Room, proximity: number) {
     let [x1, y1, x2, y2] = [room.pos.x, room.pos.y, room.pos.x + room.pos.length, room.pos.y + room.pos.breadth]
-    if (point.x >= x1 && point.x <= x2 && Math.abs(point.y - y1) < proximity) {
+
+    if (point.x >= (x1 - proximity) && point.x <= (x2 + proximity) && Math.abs(point.y - y1) < proximity) {
         //top-horizontal
         return 'h';
-    } else if (point.x >= x1 && point.x <= x2 && Math.abs(point.y - y2) < proximity) {
+    } else if (point.x >= (x1 - proximity) && point.x <= (x2 + proximity) && Math.abs(point.y - y2) < proximity) {
         //bottom-horizontal
         return 'h';
-    } else if (point.y >= y1 && point.y <= y2 && Math.abs(point.x - x1) < proximity) {
+    } else if (point.y >= (y1 - proximity) && point.y <= (y2 + proximity) && Math.abs(point.x - x1) < proximity) {
         //left-vertical
         return 'v';
-    } else if (point.y >= y1 && point.y <= y2 && Math.abs(point.x - x2) < proximity) {
+    } else if (point.y >= (y1 - proximity) && point.y <= (y2 + proximity) && Math.abs(point.x - x2) < proximity) {
         //right-vertical
         return 'v';
     }
@@ -185,7 +187,9 @@ function findRoomForWinDoor(door: WinDoor, roomIds: string[], rooms: Map<string,
 }
 
 export default function EditView() {
-    const { file, resizeFactor, scaleFactor, roomCoords, doorCoords, windowCoords, setScaleFactor, setRoomCoords, setDoorCoords, setWindowCoords } = useCanvas()
+    const { file, resizeFactor, scaleFactor, roomCoords,
+        doorCoords, windowCoords, setScaleFactor, setRoomCoords,
+        setDoorCoords, setWindowCoords, imgDrawDetails, setImgDrawDetails } = useCanvas()
     const { zoneData, setZoneData } = useZone();
     const [image, setImage] = useState<HTMLImageElement | null>(null);
     const [move, setMove] = useState(false);
@@ -212,16 +216,22 @@ export default function EditView() {
         const windoors: Map<string, WinDoor> = new Map<string, WinDoor>();
         const orphanRoomIds: string[] = [];
         if (roomCoords) roomCoords.forEach((room, index) => {
-            const id = "R" + (index + 1);
+            const newId = nanoid()
+            const id = "R-" + newId;
             const display = "Room" + (index + 1);
-            const tempRoom = getRoomFromCoords({ roomCoords: { startPoint: [room.startPoint[0], room.startPoint[1]], endPoint: [room.endPoint[0], room.endPoint[1]], color: room.color }, id, display, scaleFactor, resizeFactor })
+            const offsetX = imgDrawDetails.startX
+            const offsetY = imgDrawDetails.startY
+            const tempRoom = getRoomFromCoords({ roomCoords: { startPoint: [room.startPoint[0] + offsetX, room.startPoint[1] + offsetY], endPoint: [room.endPoint[0] + offsetX, room.endPoint[1] + offsetY], color: room.color }, id, display, scaleFactor, resizeFactor })
             rooms.set(id, tempRoom)
             orphanRoomIds.push(id);
         })
         if (doorCoords) doorCoords.forEach((door, index) => {
-            const id = "D" + (index + 1);
-            const display = "Door" + (index + 1);
-            const tempDoor = getWinDoorFromCoords({ startPoint: [door.startPoint[0], door.startPoint[1]], endPoint: [door.endPoint[0], door.endPoint[1]], color: door.color }, id, display, 'door', scaleFactor, resizeFactor);
+            const newId = nanoid()
+            const id = "D-" + newId;
+            const display = "D" + (index + 1);
+            const offsetX = imgDrawDetails.startX
+            const offsetY = imgDrawDetails.startY
+            const tempDoor = getWinDoorFromCoords({ startPoint: [door.startPoint[0] + offsetX, door.startPoint[1] + offsetY], endPoint: [door.endPoint[0] + offsetX, door.endPoint[1] + offsetY], color: door.color }, id, display, 'door', scaleFactor, resizeFactor);
             const { horizontal, roomIndex } = findRoomForWinDoor(tempDoor, orphanRoomIds, rooms)
             tempDoor.horizontal = horizontal
             const room = rooms.get(orphanRoomIds[roomIndex]);
@@ -232,9 +242,12 @@ export default function EditView() {
             windoors.set(id, tempDoor)
         })
         if (windowCoords) windowCoords.forEach((window, index) => {
-            const id = "W" + (index + 1);
-            const display = "Window" + (index + 1);
-            const tempWindow = getWinDoorFromCoords({ startPoint: [window.startPoint[0], window.startPoint[1]], endPoint: [window.endPoint[0], window.endPoint[1]], color: window.color }, id, display, 'window', scaleFactor,resizeFactor)
+            const newId = nanoid()
+            const id = "W-" + newId;
+            const display = "W" + (index + 1);
+            const offsetX = imgDrawDetails.startX
+            const offsetY = imgDrawDetails.startY
+            const tempWindow = getWinDoorFromCoords({ startPoint: [window.startPoint[0] + offsetX, window.startPoint[1] + offsetY], endPoint: [window.endPoint[0] + offsetX, window.endPoint[1] + offsetY], color: window.color }, id, display, 'window', scaleFactor, resizeFactor)
             const { horizontal, roomIndex } = findRoomForWinDoor(tempWindow, orphanRoomIds, rooms)
             tempWindow.horizontal = horizontal
             const room = rooms.get(orphanRoomIds[roomIndex]);
@@ -245,7 +258,7 @@ export default function EditView() {
             windoors.set(id, tempWindow)
         })
         setZoneData({ zones: [], orphanRoomIds: orphanRoomIds, rooms: rooms, windoors: windoors })
-    }, [resizeFactor,scaleFactor, roomCoords, doorCoords, windowCoords])
+    }, [resizeFactor, scaleFactor, roomCoords, doorCoords, windowCoords, imgDrawDetails])
 
     const reRunDetection = async () => {
         const formData = new FormData();
