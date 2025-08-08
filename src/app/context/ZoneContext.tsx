@@ -64,6 +64,8 @@ type ZonesContextType = {
     setZoneData: React.Dispatch<React.SetStateAction<ZoneData>>,
     multiSelect: boolean
     setMultiSelect: React.Dispatch<React.SetStateAction<boolean>>,
+    multiSelectOrigin: 'zone' | 'view' | null,
+    setMultiSelectOrigin: React.Dispatch<React.SetStateAction<'zone' | 'view' | null>>,
 };
 
 const ZoneContext = createContext<ZonesContextType | undefined>(undefined);
@@ -71,8 +73,9 @@ const ZoneContext = createContext<ZonesContextType | undefined>(undefined);
 export function ZoneProvider({ children }: { children: React.ReactNode }) {
     const [zoneData, setZoneData] = useState<ZoneData>({ zones: [], orphanRoomIds: [], rooms: new Map<string, Room>(), windoors: new Map<string, WinDoor>() });
     const [multiSelect, setMultiSelect] = useState<boolean>(false);
+    const [multiSelectOrigin, setMultiSelectOrigin] = useState<'zone' | 'view' | null>(null);
 
-    return <ZoneContext.Provider value={{ zoneData, setZoneData, multiSelect, setMultiSelect }}>
+    return <ZoneContext.Provider value={{ zoneData, setZoneData, multiSelect, setMultiSelect, multiSelectOrigin, setMultiSelectOrigin }}>
         {children}
     </ZoneContext.Provider>
 }

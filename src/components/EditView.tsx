@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react'
 import NextImage from 'next/image'
-import { CheckCircle2, Eraser, Move, ZoomInIcon, ZoomOutIcon, DoorOpen, DoorClosed } from 'lucide-react'
+import { CheckCircle2, Eraser, Move, ZoomInIcon, ZoomOutIcon, DoorOpen, DoorClosed, FileStack, MousePointerClick } from 'lucide-react'
 import { useCanvas } from '@/app/context/CanvasContext'
 import { useZone, Room, WinDoor, Zone, ZoneData } from '@/app/context/ZoneContext'
 import Compass from './Compass';
 import Canvas, { CanvasHandle, RectCoord } from './Canvas';
 import WindowFrame from './Icons/WindowFrame';
-import { Pointer } from 'lucide-react';
 
 const DEFAULT_CEILING_HEIGHT_FT = 10;
 const DEFAULT_WINDOW_HEIGHT_FT = 5;
@@ -187,7 +186,7 @@ function findRoomForWinDoor(door: WinDoor, roomIds: string[], rooms: Map<string,
 
 export default function EditView() {
     const { file, resizeFactor, scaleFactor, roomCoords, doorCoords, windowCoords, setScaleFactor, setRoomCoords, setDoorCoords, setWindowCoords } = useCanvas()
-    const { zoneData, setZoneData } = useZone();
+    const { zoneData, setZoneData, multiSelect, setMultiSelect, setMultiSelectOrigin } = useZone();
     const [image, setImage] = useState<HTMLImageElement | null>(null);
     const [move, setMove] = useState(false);
     const canvasRef = useRef<CanvasHandle>(null);
@@ -196,7 +195,6 @@ export default function EditView() {
     const windowHeightRef = useRef<HTMLInputElement>(null);
     const doorHeightRef = useRef<HTMLInputElement>(null);
     const [drawWindoorEnabled, setDrawWindoorEnabled] = useState<boolean>(false)
-    const { multiSelect, setMultiSelect } = useZone();
 
     useEffect(() => {
         (async () => {
@@ -331,7 +329,7 @@ export default function EditView() {
                 </div>
             </div>
             <div className='p-8 bg-[#242229] flex flex-col gap-6 rounded-lg w-[714px]'>
-                <div className='flex gap-8 justify-start'>
+                <div className='flex gap-0 justify-start'>
                     <Compass />
                     <div className='p-4 bg-[#292730] rounded-xl w-full mt-[32px]'>
                         <h4 className='mb-1 font-bold'>Tools</h4>
@@ -347,13 +345,46 @@ export default function EditView() {
                             >
                                 <ZoomOutIcon size={20} />
                             </button>
-                            <button className={`flex items-center justify-center ${move ? "bg-[#421C7F]" : "bg-[#35333A]"}  text-[#E7E6E9] px-3 py-1.5 rounded-md gap-1.5 cursor-pointer`}
+                            <button className='flex items-center justify-center bg-[#35333A] text-[#E7E6E9] px-3 py-1.5 rounded-md cursor-pointer'
+                                onClick={() => {
+                                    if (typeof window !== 'undefined') {
+                                        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+                                    }
+                                }}
+                            >
+                                <MousePointerClick size={20} />
+                                <span className="leading-none mt-0 text-sm">Select</span>
+                            </button>
+                            <button
+                                className={`flex items-center justify-center ${multiSelect ? "bg-[#421C7F]" : "bg-[#35333A]"} text-[#E7E6E9] px-3 py-1.5 rounded-md cursor-pointer`}
+                                onClick={() => {
+                                    if (!multiSelect) {
+                                        // Enable multi-select for view only (no zone creation)
+                                        setMultiSelectOrigin('view');
+                                        setMultiSelect(true);
+                                    } else {
+                                        // Disable multi-select and clear selections
+                                        setMultiSelect(false);
+                                        setZoneData(prev => {
+                                            const newRooms = new Map(prev.rooms);
+                                            newRooms.forEach((room, id) => {
+                                                if (room.selected) newRooms.set(id, { ...room, selected: false });
+                                            });
+                                            return { ...prev, rooms: newRooms };
+                                        });
+                                    }
+                                }}
+                            >
+                                <FileStack size={20} />
+                                <span className="leading-none mt-0 text-sm">Drag</span>
+                            </button>
+                            <button className={`flex items-center justify-center ${move ? "bg-[#421C7F]" : "bg-[#35333A]"}  text-[#E7E6E9] px-3 py-1.5 rounded-md cursor-pointer`}
                                 onClick={() => setMove(move => !move)}
                             >
                                 <Move size={20} />
                                 <span className="leading-none mt-0 text-sm">Move</span>
                             </button>
-                            <button className='flex items-center justify-center bg-[#35333A] text-[#E7E6E9] px-3 py-1.5 rounded-md gap-1.5 cursor-pointer'
+                            <button className='flex items-center justify-center bg-[#35333A] text-[#E7E6E9] px-3 py-1.5 rounded-md cursor-pointer'
                                 onClick={() => canvasRef.current?.handleDelete()}
                             >
                                 <Eraser size={20} />

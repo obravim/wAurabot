@@ -46,7 +46,7 @@ const COLORS = [
 ];
 
 export default function EditZone() {
-    const { zoneData, setZoneData, multiSelect, setMultiSelect } = useZone();
+    const { zoneData, setZoneData, multiSelect, setMultiSelect, multiSelectOrigin, setMultiSelectOrigin } = useZone();
     const { scaleFactor, resizeFactor } = useCanvas();
     const [editModelOpen, setEditModelOpen] = useState(false);
     const editModelData = useRef<EditModelDataType>({ itemId: "", breadth: 0, height: 0, length: 0, isRoom: true, name: "Input", isZone: false })
@@ -63,12 +63,23 @@ export default function EditZone() {
     useEffect(() => {
         //on multiselect change
         if (!multiSelect) {
-            const selectedRoomIds = Array.from(zoneData.rooms.values())
-                .filter(room => room.selected && room.zone == null)
-                .map(room => room.id);
-            if (selectedRoomIds.length === 0) {
+            // Only create zones when multi-select was managed from Edit Zone
+            if (multiSelectOrigin !== 'zone') {
                 return;
             }
+            const selectedRooms = Array.from(zoneData.rooms.values()).filter(room => room.selected);
+            if (selectedRooms.length === 0) return;
+
+            // If at least one selected room is already grouped, block and notify
+            const alreadyGroupedRoom = selectedRooms.find(room => room.zone != null);
+            if (alreadyGroupedRoom) {
+                alert(`${alreadyGroupedRoom.name} is already grouped`);
+                // revert back to multi-select mode so the button stays in the check state
+                setMultiSelect(true);
+                return;
+            }
+
+            const selectedRoomIds = selectedRooms.map(room => room.id);
 
             const newZone: Zone = {
                 id: "zone" + (zoneData.zones.length + 1),
@@ -414,7 +425,11 @@ export default function EditZone() {
                 </h3>
                 <div className='flex items-center'>
                     <button className='bg-white rounded-full overflow-hidden cursor-pointer p-0.5'
-                        onClick={() => setMultiSelect(multiSelect => !multiSelect)}
+                        onClick={() => {
+                            // Mark origin to zone so finishing selection can create a zone
+                            setMultiSelectOrigin('zone');
+                            setMultiSelect(multi => !multi);
+                        }}
                     >
                         {multiSelect ? <Check width={24} color='#421C7F' height={24} /> : <Plus width={24} color='#421C7F' height={24} />}
                     </button>

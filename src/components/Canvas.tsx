@@ -1,6 +1,6 @@
 'use client'
 
-import { Stage, Layer, Text, Rect, Line, Label, Tag, Image as KonvaImage, Circle, Transformer } from 'react-konva';
+import { Stage, Layer, Text, Rect, Line, Label, Tag, Image as KonvaImage, Circle, Transformer, Group } from 'react-konva';
 import React, { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import Konva from 'konva';
 import { DEFAULT_WINDOW_BREADTH, getRoomFromCoords, getWinDoorFromCoords, isItNear, MAX_DOOR_SIZE, ROOM_COLORS } from './EditView';
@@ -73,6 +73,8 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const windoorTransformerRef = useRef<Konva.Transformer>(null);
     const roomNodeRefs = useRef<Map<string, Konva.Rect>>(new Map());
     const windoorNodeRefs = useRef<Map<string, Konva.Rect>>(new Map());
+    const windoorLabelRefs = useRef<Map<string, Konva.Label>>(new Map());
+    const windoorDimLabelRefs = useRef<Map<string, Konva.Label>>(new Map());
     const isDragging = useRef(false);
     const lastPos = useRef<{ x: number; y: number } | null>(null);
     const lastDist = useRef<number | null>(null);
@@ -87,7 +89,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const [newRect, setNewRect] = useState<RectCoord | null>(null);
     const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
     const [selectedWindoorId, setSelectedWindoorId] = useState<string | null>(null);
-    const { zoneData, setZoneData, multiSelect } = useZone();
+    const { zoneData, setZoneData, multiSelect, setMultiSelect } = useZone();
     const zoneDataRef = useRef<ZoneData>({ zones: [], orphanRoomIds: [], rooms: new Map<string, Room>(), windoors: new Map<string, WinDoor>() });
     const [cursor, setCursor] = useState<'grabbing' | 'crosshair' | 'auto'>('auto');
     const [windoorEnabledAnchors, setWindoorEnabledAnchors] = useState<string[]>(['middle-left', 'middle-right']);
@@ -162,8 +164,13 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
             // Keep windoors of selected rooms above the room rects for hit testing
             selectedRooms.forEach(room => {
                 room.children.forEach(childId => {
-                    const childNode = windoorNodeRefs.current.get(childId);
-                    childNode?.moveToTop();
+                    const rectNode = windoorNodeRefs.current.get(childId);
+                    const labelNode = windoorLabelRefs.current.get(childId);
+                    const dimLabelNode = windoorDimLabelRefs.current.get(childId);
+                    // Move rect up, then ensure labels are above the rect
+                    rectNode?.moveToTop();
+                    labelNode?.moveToTop();
+                    dimLabelNode?.moveToTop();
                 });
             });
             layerRef.current?.batchDraw();
@@ -252,6 +259,8 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                     setZoneData(unSelectRooms);
                     setDrawRect('none')
                     setSelectedRoomId(null);
+                    setSelectedWindoorId(null);
+                    setMultiSelect(false);
                 }
             }
             // if (e.ctrlKey && e.key.toLowerCase() === 'g') {
@@ -1540,9 +1549,12 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                     room.children.map(windoorId => {
                                         const windoor = zoneData.windoors.get(windoorId);
                                         if (!windoor) return null;
-                                        const windoorOpacity = !!selectedWindoorId
-                                            ? (windoor.roomId === parentIdOfSelectedChild ? 1 : 0.5)
-                                            : (anySelected ? (room.selected ? 1 : 0.5) : 1);
+                                        const isGroupedToZone = !!room.zone;
+                                        const windoorOpacity = isGroupedToZone
+                                            ? 0.5
+                                            : (!!selectedWindoorId
+                                                ? (windoor.roomId === parentIdOfSelectedChild ? 1 : 0.5)
+                                                : (anySelected ? (room.selected ? 1 : 0.5) : 1));
                                         return <React.Fragment key={windoor.id} >
                                             <Rect
                                                 key={windoor.id}
@@ -1675,7 +1687,12 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                     }
                                                 }}
                                             />
-                                            <Label key={windoor.id + "_label"} x={windoor.pos.x + windoor.pos.length / 2 - 6} y={windoor.pos.y + windoor.pos.breadth / 2 - (windoor.type == 'window' ? 4 : 15)} listening={false}>
+                                            <Label key={windoor.id + "_label"} x={windoor.pos.x + windoor.pos.length / 2 - 6} y={windoor.pos.y + windoor.pos.breadth / 2 - (windoor.type == 'window' ? 4 : 15)} listening={false}
+                                                ref={(node: Konva.Label | null) => {
+                                                    if (node) windoorLabelRefs.current.set(windoor.id, node);
+                                                    else windoorLabelRefs.current.delete(windoor.id);
+                                                }}
+                                            >
                                                 <Text
                                                     text={windoor.id}
                                                     fontSize={10}
@@ -1685,6 +1702,18 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                     fontStyle='bold'   // Adjust horizontal alignment if needed
                                                 />
                                             </Label>
+                                            {/* Ensure labels are always above the windoor rect */}
+                                            {(() => {
+                                                const rectNode = windoorNodeRefs.current.get(windoor.id);
+                                                const labelNode = windoorLabelRefs.current.get(windoor.id);
+                                                const dimLabelNode = windoorDimLabelRefs.current.get(windoor.id);
+                                                // Move rect first, then labels to ensure labels are on top
+                                                rectNode?.moveToTop();
+                                                labelNode?.moveToTop();
+                                                dimLabelNode?.moveToTop();
+                                                layerRef.current?.batchDraw();
+                                                return null;
+                                            })()}
                                             <Label key={windoor.id + "_dimen"}
                                                 x={windoor.type == 'window' ? windoor.horizontal ? windoor.pos.x + windoor.pos.length / 2 - 10 : windoor.pos.x + windoor.pos.length + 2
                                                     : windoor.pos.x + windoor.pos.length / 2 - 20
@@ -1692,7 +1721,12 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                 y={windoor.type == 'window' ? windoor.horizontal ? windoor.pos.y + windoor.pos.breadth + 2 : windoor.pos.y + windoor.pos.breadth / 2 - 10
                                                     : windoor.pos.y + windoor.pos.breadth / 2 - 5
                                                 }
-                                                listening={false}>
+                                                listening={false}
+                                                ref={(node: Konva.Label | null) => {
+                                                    if (node) windoorDimLabelRefs.current.set(windoor.id, node);
+                                                    else windoorDimLabelRefs.current.delete(windoor.id);
+                                                }}
+                                            >
                                                 <Text
                                                     text={`${windoor.dimension.length_ft.toFixed(2)} ft x \n ${windoor.dimension.height_ft.toFixed(2)} ft`}
                                                     fontSize={10}
