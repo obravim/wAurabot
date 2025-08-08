@@ -5,7 +5,8 @@ import { useCanvas } from '@/app/context/CanvasContext'
 import { useZone, Room, WinDoor, Zone, ZoneData } from '@/app/context/ZoneContext'
 import Compass from './Compass';
 import Canvas, { CanvasHandle, RectCoord } from './Canvas';
-import WindowFrame from './Icons/WindowFrame'
+import WindowFrame from './Icons/WindowFrame';
+import { Pointer } from 'lucide-react';
 
 const DEFAULT_CEILING_HEIGHT_FT = 10;
 const DEFAULT_WINDOW_HEIGHT_FT = 5;
@@ -195,6 +196,7 @@ export default function EditView() {
     const windowHeightRef = useRef<HTMLInputElement>(null);
     const doorHeightRef = useRef<HTMLInputElement>(null);
     const [drawWindoorEnabled, setDrawWindoorEnabled] = useState<boolean>(false)
+    const { multiSelect, setMultiSelect } = useZone();
 
     useEffect(() => {
         (async () => {

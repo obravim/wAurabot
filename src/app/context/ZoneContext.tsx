@@ -10,6 +10,12 @@ export type WinDoor = {
     stroke: string,
     horizontal: boolean,
     roomId: string,
+    transformStartState?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
 }
 
 export type Room = {
@@ -20,10 +26,22 @@ export type Room = {
     zoneColor: string | null,
     selected: boolean,
     zone: string | null,
-    dimension: { length_ft: number, breadth_ft: number, ceilingHeight_ft: number },
+    dimension: { length_ft: number, breadth_ft: number, ceilingHeight_ft: number, area_ft?: number; },
     children: string[],
     expanded: boolean,
-    dragStartPos?: { x: number; y: number };
+    dragStartPos?: DragStartState;
+    transformStartState?: {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    };
+}
+
+type DragStartState = {
+    x: number;
+    y: number;
+    children: Record<string, { x: number; y: number }>;
 }
 
 export type Zone = {
@@ -45,7 +63,7 @@ type ZonesContextType = {
     zoneData: ZoneData,
     setZoneData: React.Dispatch<React.SetStateAction<ZoneData>>,
     multiSelect: boolean
-    setMultiSelect: React.Dispatch<React.SetStateAction<boolean>>
+    setMultiSelect: React.Dispatch<React.SetStateAction<boolean>>,
 };
 
 const ZoneContext = createContext<ZonesContextType | undefined>(undefined);

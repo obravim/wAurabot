@@ -88,18 +88,16 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const [cursor, setCursor] = useState<'grabbing' | 'crosshair' | 'auto'>('auto');
 
     useEffect(() => {
-        if (selectedRoomId && transformerRef.current) {
-            const node = roomNodeRefs.current.get(selectedRoomId);
-            if (node) {
-            transformerRef.current.nodes([node]);
-            transformerRef.current.getLayer()?.batchDraw();
-            }
-        } else if (transformerRef.current) {
-            transformerRef.current.nodes([]);
+        if (transformerRef.current) {
+            const selectedNodes = Array.from(zoneData.rooms.values())
+                .filter(room => room.selected)
+                .map(room => roomNodeRefs.current.get(room.id))
+                .filter(Boolean) as Konva.Rect[];
+            
+            transformerRef.current.nodes(selectedNodes);
             transformerRef.current.getLayer()?.batchDraw();
         }
-    }, [selectedRoomId, zoneData.rooms]);
-
+    }, [zoneData.rooms, selectedRoomId, multiSelect]);
 
     useEffect(() => {
         if (multiSelect) {
@@ -328,8 +326,40 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     };
 
     const handleMouseDown = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
-        // If the target is a Rect (room), let Konva handle the drag
         if (e.target instanceof Konva.Rect) {
+            // For multi-select, we want to track the initial positions of all selected rooms
+            if (multiSelect) {
+                setZoneData(prev => {
+                    const newRooms = new Map(prev.rooms);
+                    const selectedRooms = Array.from(prev.rooms.values())
+                        .filter(room => room.selected);
+
+                    selectedRooms.forEach(room => {
+                        // Prepare children positions
+                        const childrenPositions: Record<string, { x: number; y: number }> = {};
+                        room.children.forEach(childId => {
+                            const child = prev.windoors.get(childId);
+                            if (child) {
+                                childrenPositions[childId] = {
+                                    x: child.pos.x,
+                                    y: child.pos.y
+                                };
+                            }
+                        });
+
+                        newRooms.set(room.id, {
+                            ...room,
+                            dragStartPos: {
+                                x: room.pos.x,
+                                y: room.pos.y,
+                                children: childrenPositions
+                            }
+                        });
+                    });
+
+                    return { ...prev, rooms: newRooms };
+                });
+            }
             return;
         }
         if (move) {
@@ -798,7 +828,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
         }
     };
 
-
+    
     return (
         <div style={{ cursor: cursor }}>
             <Stage
@@ -919,86 +949,212 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                     stroke={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
                                     strokeWidth={room.selected ? 3 : 2}
                                     draggable={room.selected}
-                                    onDragStart={() => {               
-                                        // Bring to front when dragging starts
+                                    // onDragStart={() => {               
+                                    //     // Bring to front when dragging starts
+                                    //     const node = roomNodeRefs.current.get(room.id);
+                                    //     if (node) {
+                                    //         node.moveToTop();
+                                    //         layerRef.current?.batchDraw();
+                                    //     }
+                                    //     room.dragStartPos = { x: roomRect.x, y: roomRect.y };
+                                    // }}
+                                    // onDragMove={(e) => {
+                                    //     const node = e.target;
+                                    //     const dx = node.x() - room.dragStartPos!.x;
+                                    //     const dy = node.y() - room.dragStartPos!.y;
+                                        
+                                    //     // Update children positions in real-time during drag
+                                    //     const updatedRoom = { ...room };
+                                    //     updatedRoom.pos.x = node.x();
+                                    //     updatedRoom.pos.y = node.y();
+                                        
+                                    //     // Update children positions
+                                    //     updatedRoom.children.forEach(childId => {
+                                    //         const child = zoneDataRef.current.windoors.get(childId);
+                                    //         if (child) {
+                                    //             child.pos.x += dx;
+                                    //             child.pos.y += dy;
+                                    //         }
+                                    //     });
+                                        
+                                    //     // Update the room's position reference
+                                    //     room.dragStartPos = { x: node.x(), y: node.y() };
+                                    // }}
+                                    // onDragEnd={(e) => {
+                                    //     const node = e.target;
+                                    //     const dx = node.x() - room.dragStartPos!.x;
+                                    //     const dy = node.y() - room.dragStartPos!.y;
+                                        
+                                    //     setZoneData(prev => {
+                                    //         const newRooms = new Map(prev.rooms);
+                                    //         const newWindoors = new Map(prev.windoors);
+                                            
+                                    //         // Update room position
+                                    //         const updatedRoom = { 
+                                    //             ...room,
+                                    //             selected: true,
+                                    //             pos: {
+                                    //                 ...room.pos,
+                                    //                 x: node.x(),
+                                    //                 y: node.y()
+                                    //             }
+                                    //         };
+                                    //         newRooms.set(room.id, updatedRoom);
+                                            
+                                    //         // Update all children positions
+                                    //         room.children.forEach(childId => {
+                                    //             const child = newWindoors.get(childId);
+                                    //             if (child) {
+                                    //                 newWindoors.set(childId, {
+                                    //                     ...child,
+                                    //                     pos: {
+                                    //                         ...child.pos,
+                                    //                         x: child.pos.x + dx,
+                                    //                         y: child.pos.y + dy
+                                    //                     }
+                                    //                 });
+                                    //             }
+                                    //         });
+                                            
+                                    //         return {
+                                    //             ...prev,
+                                    //             rooms: newRooms,
+                                    //             windoors: newWindoors
+                                    //         };
+                                    //     });
+                                    //     // Force update transformer after drag
+                                    //     setTimeout(() => {
+                                    //         if (transformerRef.current && roomNodeRefs.current.has(room.id)) {
+                                    //             transformerRef.current.nodes([roomNodeRefs.current.get(room.id)!]);
+                                    //             transformerRef.current.getLayer()?.batchDraw();
+                                    //         }
+                                    //     }, 0);
+                                    // }}
+                                    onDragStart={() => {
                                         const node = roomNodeRefs.current.get(room.id);
                                         if (node) {
                                             node.moveToTop();
                                             layerRef.current?.batchDraw();
                                         }
-                                        room.dragStartPos = { x: roomRect.x, y: roomRect.y };
-                                    }}
-                                    onDragMove={(e) => {
-                                        const node = e.target;
-                                        const dx = node.x() - room.dragStartPos!.x;
-                                        const dy = node.y() - room.dragStartPos!.y;
-                                        
-                                        // Update children positions in real-time during drag
-                                        const updatedRoom = { ...room };
-                                        updatedRoom.pos.x = node.x();
-                                        updatedRoom.pos.y = node.y();
-                                        
-                                        // Update children positions
-                                        updatedRoom.children.forEach(childId => {
-                                            const child = zoneDataRef.current.windoors.get(childId);
-                                            if (child) {
-                                                child.pos.x += dx;
-                                                child.pos.y += dy;
-                                            }
-                                        });
-                                        
-                                        // Update the room's position reference
-                                        room.dragStartPos = { x: node.x(), y: node.y() };
-                                    }}
-                                    onDragEnd={(e) => {
-                                        const node = e.target;
-                                        const dx = node.x() - room.dragStartPos!.x;
-                                        const dy = node.y() - room.dragStartPos!.y;
                                         
                                         setZoneData(prev => {
                                             const newRooms = new Map(prev.rooms);
-                                            const newWindoors = new Map(prev.windoors);
-                                            
-                                            // Update room position
-                                            const updatedRoom = { 
-                                                ...room,
-                                                selected: true,
-                                                pos: {
-                                                    ...room.pos,
-                                                    x: node.x(),
-                                                    y: node.y()
-                                                }
-                                            };
-                                            newRooms.set(room.id, updatedRoom);
-                                            
-                                            // Update all children positions
-                                            room.children.forEach(childId => {
-                                                const child = newWindoors.get(childId);
+                                            const currentRoom = newRooms.get(room.id);
+                                            if (!currentRoom) return prev;
+
+                                            // Prepare children positions
+                                            const childrenPositions: Record<string, { x: number; y: number }> = {};
+                                            currentRoom.children.forEach(childId => {
+                                                const child = prev.windoors.get(childId);
                                                 if (child) {
-                                                    newWindoors.set(childId, {
-                                                        ...child,
-                                                        pos: {
-                                                            ...child.pos,
-                                                            x: child.pos.x + dx,
-                                                            y: child.pos.y + dy
-                                                        }
-                                                    });
+                                                    childrenPositions[childId] = {
+                                                        x: child.pos.x,
+                                                        y: child.pos.y
+                                                    };
+                                                }
+                                            });
+
+                                            newRooms.set(currentRoom.id, {
+                                                ...currentRoom,
+                                                dragStartPos: {
+                                                    x: currentRoom.pos.x,
+                                                    y: currentRoom.pos.y,
+                                                    children: childrenPositions
                                                 }
                                             });
                                             
-                                            return {
-                                                ...prev,
-                                                rooms: newRooms,
-                                                windoors: newWindoors
-                                            };
+                                            return { ...prev, rooms: newRooms };
                                         });
-                                        // Force update transformer after drag
-                                        setTimeout(() => {
-                                            if (transformerRef.current && roomNodeRefs.current.has(room.id)) {
-                                                transformerRef.current.nodes([roomNodeRefs.current.get(room.id)!]);
-                                                transformerRef.current.getLayer()?.batchDraw();
+                                    }}
+                                    onDragMove={(e) => {
+                                        const node = e.target;
+                                        const currentRoom = zoneDataRef.current.rooms.get(room.id);
+                                        if (!currentRoom?.dragStartPos) return;
+
+                                        const dx = node.x() - currentRoom.dragStartPos.x;
+                                        const dy = node.y() - currentRoom.dragStartPos.y;
+
+                                        setZoneData(prev => {
+                                            const newRooms = new Map(prev.rooms);
+                                            const newWindoors = new Map(prev.windoors);
+
+                                            // Update room position
+                                            newRooms.set(currentRoom.id, {
+                                                ...currentRoom,
+                                                pos: {
+                                                    ...currentRoom.pos,
+                                                    x: node.x(),
+                                                    y: node.y()
+                                                }
+                                            });
+
+                                            // Update children positions
+                                            if (currentRoom.dragStartPos) {
+                                                Object.entries(currentRoom.dragStartPos.children).forEach(([childId, startPos]) => {
+                                                    const child = newWindoors.get(childId);
+                                                    if (child) {
+                                                        newWindoors.set(childId, {
+                                                            ...child,
+                                                            pos: {
+                                                                ...child.pos,
+                                                                x: startPos.x + dx,
+                                                                y: startPos.y + dy
+                                                            }
+                                                        });
+                                                    }
+                                                });
                                             }
-                                        }, 0);
+
+                                            return { ...prev, rooms: newRooms, windoors: newWindoors };
+                                        });
+                                    }}
+                                    onDragEnd={(e) => {
+                                        const node = e.target;
+                                        const currentRoom = zoneDataRef.current.rooms.get(room.id);
+                                        if (!currentRoom?.dragStartPos) return;
+
+                                        const dx = node.x() - currentRoom.dragStartPos.x;
+                                        const dy = node.y() - currentRoom.dragStartPos.y;
+
+                                        setZoneData(prev => {
+                                            const newRooms = new Map(prev.rooms);
+                                            const newWindoors = new Map(prev.windoors);
+
+                                            // Update room position
+                                            newRooms.set(currentRoom.id, {
+                                                ...currentRoom,
+                                                selected: true,
+                                                pos: {
+                                                    ...currentRoom.pos,
+                                                    x: node.x(),
+                                                    y: node.y()
+                                                },
+                                                dragStartPos: undefined
+                                            });
+
+                                            // Update children positions
+                                            if (currentRoom.dragStartPos) {
+                                                Object.entries(currentRoom.dragStartPos.children).forEach(([childId, startPos]) => {
+                                                    const child = newWindoors.get(childId);
+                                                    if (child) {
+                                                        newWindoors.set(childId, {
+                                                            ...child,
+                                                            pos: {
+                                                                ...child.pos,
+                                                                x: startPos.x + dx,
+                                                                y: startPos.y + dy
+                                                            }
+                                                        });
+                                                    }
+                                                });
+                                            }
+
+                                            return { ...prev, rooms: newRooms, windoors: newWindoors };
+                                        });
+
+                                        // Reset node position
+                                        node.x(currentRoom.pos.x);
+                                        node.y(currentRoom.pos.y);
                                     }}
                                     onMouseDown={(e) => {
                                         e.cancelBubble = true;
@@ -1252,7 +1408,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                 listening={false}
                             />
                         )}
-                        <Transformer
+                        {/* <Transformer
                             ref={transformerRef}
                             rotateEnabled={false} // or true if needed
                             anchorSize={6}
@@ -1264,6 +1420,199 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                             onTransformEnd={(e) => {
                                 // Prevent this from interfering with selection
                                 e.cancelBubble = true;
+                            }}
+                        /> */}
+                        <Transformer
+                            ref={transformerRef}
+                            rotateEnabled={false}
+                            anchorSize={6}
+                            boundBoxFunc={(oldBox, newBox) => {
+                                // Prevent shrinking too small
+                                if (newBox.width < 10 || newBox.height < 10) return oldBox;
+                                return newBox;
+                            }}
+                            onTransformStart={() => {
+                                if (!multiSelect) return;
+                                
+                                // Store initial positions and dimensions for all selected rooms
+                                const selectedRooms = Array.from(zoneDataRef.current.rooms.values())
+                                    .filter(room => room.selected);
+                                    
+                                selectedRooms.forEach(room => {
+                                    room.transformStartState = {
+                                        x: room.pos.x,
+                                        y: room.pos.y,
+                                        width: room.pos.length,
+                                        height: room.pos.breadth
+                                    };
+                                });
+                            }}
+                            onTransform={(e) => {
+                                if (!multiSelect) return;
+                                
+                                const nodes = transformerRef.current?.nodes();
+                                if (!nodes || nodes.length === 0) return;
+                                
+                                // Calculate average scale from all selected rooms
+                                let avgScaleX = 0;
+                                let avgScaleY = 0;
+                                nodes.forEach(node => {
+                                    avgScaleX += node.scaleX();
+                                    avgScaleY += node.scaleY();
+                                });
+                                avgScaleX /= nodes.length;
+                                avgScaleY /= nodes.length;
+                                
+                                // Update all selected rooms in real-time during transform
+                                const updatedRooms = new Map(zoneDataRef.current.rooms);
+                                const updatedWindoors = new Map(zoneDataRef.current.windoors);
+                                
+                                nodes.forEach(node => {
+                                    const roomId = node.id();
+                                    const room = updatedRooms.get(roomId);
+                                    if (!room || !room.transformStartState) return;
+                                    
+                                    // Calculate new position and dimensions
+                                    const newX = room.transformStartState.x * avgScaleX;
+                                    const newY = room.transformStartState.y * avgScaleY;
+                                    const newWidth = room.transformStartState.width * avgScaleX;
+                                    const newHeight = room.transformStartState.height * avgScaleY;
+                                    
+                                    // Update room
+                                    updatedRooms.set(roomId, {
+                                        ...room,
+                                        pos: {
+                                            x: newX,
+                                            y: newY,
+                                            length: newWidth,
+                                            breadth: newHeight
+                                        },
+                                        dimension: {
+                                            ...room.dimension,
+                                            length_ft: (newWidth * (scaleFactor * resizeFactor)) / 12,
+                                            breadth_ft: (newHeight * (scaleFactor * resizeFactor)) / 12,
+                                            area_ft: (newWidth * newHeight * Math.pow(scaleFactor * resizeFactor, 2)) / 144
+                                        }
+                                    });
+                                    
+                                    // Update children (windows/doors)
+                                    room.children.forEach(childId => {
+                                        const child = updatedWindoors.get(childId);
+                                        if (child && child.transformStartState) {
+                                            const childScaleX = child.transformStartState.width / newWidth;
+                                            const childScaleY = child.transformStartState.height / newHeight;
+                                            
+                                            updatedWindoors.set(childId, {
+                                                ...child,
+                                                pos: {
+                                                    x: newX + (child.transformStartState.x - room.transformStartState!.x) * childScaleX,
+                                                    y: newY + (child.transformStartState.y - room.transformStartState!.y) * childScaleY,
+                                                    length: child.transformStartState.width * childScaleX,
+                                                    breadth: child.transformStartState.height * childScaleY
+                                                },
+                                                dimension: {
+                                                    ...child.dimension,
+                                                    length_ft: (child.transformStartState.width * childScaleX * (scaleFactor * resizeFactor)) / 12,
+                                                    height_ft: (child.transformStartState.height * childScaleY * (scaleFactor * resizeFactor)) / 12
+                                                }
+                                            });
+                                        }
+                                    });
+                                });
+                                
+                                // Apply updates
+                                setZoneData(prev => ({
+                                    ...prev,
+                                    rooms: updatedRooms,
+                                    windoors: updatedWindoors
+                                }));
+                            }}
+                            onTransformEnd={(e) => {
+                                e.cancelBubble = true;
+                                
+                                const nodes = transformerRef.current?.nodes();
+                                if (!nodes) return;
+                                
+                                if (multiSelect) {
+                                    // Finalize transform for all selected rooms
+                                    const updatedRooms = new Map(zoneDataRef.current.rooms);
+                                    const updatedWindoors = new Map(zoneDataRef.current.windoors);
+                                    
+                                    nodes.forEach(node => {
+                                        const roomId = node.id();
+                                        const room = updatedRooms.get(roomId);
+                                        if (!room || !room.transformStartState) return;
+                                        
+                                        // Reset scale after transform
+                                        node.scaleX(1);
+                                        node.scaleY(1);
+                                        
+                                        // Update room dimensions
+                                        const newWidth = node.width();
+                                        const newHeight = node.height();
+                                        
+                                        updatedRooms.set(roomId, {
+                                            ...room,
+                                            pos: {
+                                                x: node.x(),
+                                                y: node.y(),
+                                                length: newWidth,
+                                                breadth: newHeight
+                                            },
+                                            dimension: {
+                                                ...room.dimension,
+                                                length_ft: (newWidth * (scaleFactor * resizeFactor)) / 12,
+                                                breadth_ft: (newHeight * (scaleFactor * resizeFactor)) / 12,
+                                                area_ft: (newWidth * newHeight * Math.pow(scaleFactor * resizeFactor, 2)) / 144
+                                            }
+                                        });
+                                        
+                                        // Update children
+                                        room.children.forEach(childId => {
+                                            const child = updatedWindoors.get(childId);
+                                            if (child) {
+                                                updatedWindoors.set(childId, {
+                                                    ...child,
+                                                    pos: {
+                                                        ...child.pos,
+                                                        x: child.pos.x + (node.x() - room.transformStartState!.x),
+                                                        y: child.pos.y + (node.y() - room.transformStartState!.y)
+                                                    }
+                                                });
+                                            }
+                                        });
+                                    });
+                                    
+                                    setZoneData(prev => ({
+                                        ...prev,
+                                        rooms: updatedRooms,
+                                        windoors: updatedWindoors
+                                    }));
+                                } else {
+                                    // Single room transform (original behavior)
+                                    const node = nodes[0];
+                                    const roomId = node.id();
+                                    const room = zoneDataRef.current.rooms.get(roomId);
+                                    if (!room) return;
+                                    
+                                    const scaleX = node.scaleX();
+                                    const scaleY = node.scaleY();
+                                    
+                                    // ... (keep your existing single-room transform logic here)
+                                }
+                                
+                                // Update transformer
+                                setTimeout(() => {
+                                    if (transformerRef.current) {
+                                        const selectedNodes = Array.from(zoneData.rooms.values())
+                                            .filter(room => room.selected)
+                                            .map(room => roomNodeRefs.current.get(room.id))
+                                            .filter(Boolean) as Konva.Rect[];
+                                        
+                                        transformerRef.current.nodes(selectedNodes);
+                                        transformerRef.current.getLayer()?.batchDraw();
+                                    }
+                                }, 0);
                             }}
                         />
                     </Layer>
