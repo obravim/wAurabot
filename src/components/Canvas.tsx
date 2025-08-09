@@ -182,6 +182,8 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
             if (node) {
                 windoorTransformerRef.current.nodes([node]);
                 node.moveToTop();
+                // Keep transformer above all nodes so resize anchors are visible and interactive
+                windoorTransformerRef.current.moveToTop();
                 layerRef.current?.batchDraw();
             } else {
                 windoorTransformerRef.current.nodes([]);
@@ -210,8 +212,14 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
         }
         const wd = zoneDataRef.current.windoors.get(selectedWindoorId);
         if (!wd) return;
-        if (wd.horizontal) setWindoorEnabledAnchors(['middle-left', 'middle-right']);
-        else setWindoorEnabledAnchors(['top-center', 'bottom-center']);
+        if (wd.type === 'door') {
+            // Doors: use corner anchors so both dimensions change, allowing proper square resize
+            setWindoorEnabledAnchors(['top-left', 'top-right', 'bottom-left', 'bottom-right']);
+        } else {
+            // Windows: constrain to axis along wall
+            if (wd.horizontal) setWindoorEnabledAnchors(['middle-left', 'middle-right']);
+            else setWindoorEnabledAnchors(['top-center', 'bottom-center']);
+        }
     }, [selectedWindoorId]);
 
     useEffect(() => {
@@ -1654,6 +1662,8 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                      if (node && windoorTransformerRef.current) {
                                                          windoorTransformerRef.current.nodes([node]);
                                                          node.moveToTop();
+                                                         // Ensure transformer stays above the node after drag/select
+                                                         windoorTransformerRef.current.moveToTop();
                                                          layerRef.current?.batchDraw();
                                                      }
                                                 }}
@@ -1711,6 +1721,8 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                 rectNode?.moveToTop();
                                                 labelNode?.moveToTop();
                                                 dimLabelNode?.moveToTop();
+                                                // Finally, keep transformer at absolute top for visible anchors
+                                                windoorTransformerRef.current?.moveToTop();
                                                 layerRef.current?.batchDraw();
                                                 return null;
                                             })()}
@@ -1731,7 +1743,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                     text={`${windoor.dimension.length_ft.toFixed(2)} ft x \n ${windoor.dimension.height_ft.toFixed(2)} ft`}
                                                     fontSize={10}
                                                     opacity={windoorOpacity}
-                                                    fill={room.selected ? 'gold' : room.zone && room.zoneColor ? room.zoneColor : room.stroke}
+                                                    fill={room.selected ? 'gold' : room.zone && room.zoneColor ? 'black' : 'black'}
                                                     padding={0}
                                                     fontStyle='bold'   // Adjust horizontal alignment if needed
                                                 />
@@ -2014,7 +2026,9 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                         // remove border lock: keep proposed x
                                     }
                                 } else {
-                                    const sizePx = Math.min(Math.max(width, height), MAX_DOOR_SIZE);
+                                    // Doors: keep square using the smaller side so shrinking works, with min 6 and max MAX_DOOR_SIZE
+                                    const sizeBySmallerSide = Math.min(width, height);
+                                    const sizePx = Math.min(Math.max(sizeBySmallerSide, 6), MAX_DOOR_SIZE);
                                     width = sizePx;
                                     height = sizePx;
                                     // remove border lock: keep proposed x/y
@@ -2046,7 +2060,9 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                         newW = wd.pos.length;
                                     }
                                 } else {
-                                    const sizePx = Math.min(Math.max(newW, newH), MAX_DOOR_SIZE);
+                                    // Doors: keep square by smaller dimension so shrinking works, clamp to MAX_DOOR_SIZE
+                                    const sizeBySmallerSide = Math.min(newW, newH);
+                                    const sizePx = Math.min(Math.max(sizeBySmallerSide, 6), MAX_DOOR_SIZE);
                                     newW = sizePx;
                                     newH = sizePx;
                                     // remove border lock: keep proposed x/y
