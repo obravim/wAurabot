@@ -93,6 +93,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
     const zoneDataRef = useRef<ZoneData>({ zones: [], orphanRoomIds: [], rooms: new Map<string, Room>(), windoors: new Map<string, WinDoor>() });
     const [cursor, setCursor] = useState<'grabbing' | 'crosshair' | 'auto'>('auto');
     const [windoorEnabledAnchors, setWindoorEnabledAnchors] = useState<string[]>(['middle-left', 'middle-right']);
+    const skipNextStageMouseUpRef = useRef<boolean>(false);
     const windoorDragStartRef = useRef<Map<string, { x: number; y: number; wall: 'top' | 'bottom' | 'left' | 'right' }>>(new Map());
 
     // Helpers for windoor interactions
@@ -159,7 +160,6 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 .filter(Boolean) as Konva.Rect[];
 
             transformerRef.current.nodes(selectedRoomNodes);
-            transformerRef.current.getLayer()?.batchDraw();
 
             // Keep windoors of selected rooms above the room rects for hit testing
             selectedRooms.forEach(room => {
@@ -173,6 +173,12 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                     dimLabelNode?.moveToTop();
                 });
             });
+
+            // Ensure room transformer anchors are above other nodes when a room is selected and no windoor is selected
+            if (selectedRoomNodes.length > 0 && !selectedWindoorId) {
+                transformerRef.current.moveToTop();
+            }
+            transformerRef.current.getLayer()?.batchDraw();
             layerRef.current?.batchDraw();
         }
 
@@ -745,6 +751,11 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                 setDrawRect('none')
             }
             else {
+                if (skipNextStageMouseUpRef.current) {
+                    // A child handled selection; skip room hit-test once
+                    skipNextStageMouseUpRef.current = false;
+                    return;
+                }
                 if (move || drawRect != 'none') return;
                 const stage = stageRef.current;
                 if (!stage) return;
@@ -1581,7 +1592,7 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                 stroke={(selectedWindoorId === windoor.id) ? 'gold' : (room.selected ? 'gold' : 'black')}
                                                 strokeWidth={1}
                                                 listening={true}
-                                                draggable={true}
+                                                draggable={room.selected || selectedWindoorId === windoor.id}
                                                 dragBoundFunc={(pos) => {
                                                     // Constrain movement to wall axis and room bounds; prevent overlap
                                                     const clamped = clampWindoorPosToRoom(windoor.id, pos);
@@ -1594,6 +1605,12 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                 }}
                                                 onDragStart={(e) => {
                                                     e.cancelBubble = true;
+                                                    if (!(room.selected || selectedWindoorId === windoor.id)) {
+                                                        return;
+                                                    }
+                                                    // Ensure room stays unselected while dragging a windoor
+                                                    setZoneData(unSelectRooms);
+                                                    setSelectedRoomId(null);
                                                     setSelectedWindoorId(windoor.id);
                                                     // Store wall used during this drag
                                                     windoorDragStartRef.current.set(windoor.id, {
@@ -1654,31 +1671,66 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                 }}
                                                 onMouseDown={(e) => {
                                                     e.cancelBubble = true;
+                                                    // prevent stage mouseup-based room selection from running after this
+                                                    skipNextStageMouseUpRef.current = true;
+                                                    // If this windoor is already selected, keep rooms unselected and continue
+                                                    if (selectedWindoorId === windoor.id) {
+                                                        setZoneData(unSelectRooms);
+                                                        setSelectedRoomId(null);
+                                                        setSelectedWindoorId(windoor.id);
+                                                        const node = windoorNodeRefs.current.get(windoor.id);
+                                                        if (node && windoorTransformerRef.current) {
+                                                            windoorTransformerRef.current.nodes([node]);
+                                                            node.moveToTop();
+                                                            // Keep windoor transformer above windoor, but below room transformer if a room is selected
+                                                            if (Array.from(zoneDataRef.current.rooms.values()).some(r => r.selected)) {
+                                                                transformerRef.current?.moveToTop();
+                                                            }
+                                                            windoorTransformerRef.current.moveToTop();
+                                                            layerRef.current?.batchDraw();
+                                                        }
+                                                        return;
+                                                    }
+                                                    if (!room.selected) {
+                                                        // Parent not selected: select parent instead, do not select child
+                                                        setSelectedWindoorId(null);
+                                                        setZoneData(prev => {
+                                                            const newRooms = new Map(prev.rooms);
+                                                            if (!multiSelect) {
+                                                                for (const [rid, rm] of newRooms) {
+                                                                    if (rm.selected) newRooms.set(rid, { ...rm, selected: false });
+                                                                }
+                                                            }
+                                                            const parent = newRooms.get(room.id);
+                                                            if (parent) newRooms.set(room.id, { ...parent, selected: true });
+                                                            return { ...prev, rooms: newRooms };
+                                                        });
+                                                        setSelectedRoomId(room.id);
+                                                        return;
+                                                    }
                                                     // Selecting a windoor deselects rooms for transformer clarity
                                                     setZoneData(unSelectRooms);
                                                     setSelectedRoomId(null);
                                                     setSelectedWindoorId(windoor.id);
-                                                     const node = windoorNodeRefs.current.get(windoor.id);
-                                                     if (node && windoorTransformerRef.current) {
-                                                         windoorTransformerRef.current.nodes([node]);
-                                                         node.moveToTop();
-                                                         // Ensure transformer stays above the node after drag/select
-                                                         windoorTransformerRef.current.moveToTop();
-                                                         layerRef.current?.batchDraw();
-                                                     }
+                                                    const node = windoorNodeRefs.current.get(windoor.id);
+                                                    if (node && windoorTransformerRef.current) {
+                                                        windoorTransformerRef.current.nodes([node]);
+                                                        node.moveToTop();
+                                                        // Ensure windoor transformer is above node; room transformer stays on top when rooms are selected
+                                                        windoorTransformerRef.current.moveToTop();
+                                                        layerRef.current?.batchDraw();
+                                                    }
                                                 }}
                                                  onClick={(e) => {
-                                                     e.cancelBubble = true;
-                                                     setZoneData(unSelectRooms);
-                                                     setSelectedRoomId(null);
-                                                     setSelectedWindoorId(windoor.id);
-                                                 }}
-                                                 onTap={(e) => {
-                                                     e.cancelBubble = true;
-                                                     setZoneData(unSelectRooms);
-                                                     setSelectedRoomId(null);
-                                                     setSelectedWindoorId(windoor.id);
-                                                 }}
+                                                      // Selection decision is handled in onMouseDown to avoid conflicting click sequencing
+                                                      e.cancelBubble = true;
+                                                      return;
+                                                  }}
+                                                  onTap={(e) => {
+                                                      // Mirror onClick: do not change selection here
+                                                      e.cancelBubble = true;
+                                                      return;
+                                                  }}
                                                 onContextMenu={(e) => {
                                                     const stage = e.target.getStage();
                                                     if (stage) {
@@ -1721,7 +1773,10 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                                 rectNode?.moveToTop();
                                                 labelNode?.moveToTop();
                                                 dimLabelNode?.moveToTop();
-                                                // Finally, keep transformer at absolute top for visible anchors
+                                                // Priority: if a room is selected and no windoor is selected, room transformer must be topmost
+                                                if (Array.from(zoneDataRef.current.rooms.values()).some(r => r.selected) && !selectedWindoorId) {
+                                                    transformerRef.current?.moveToTop();
+                                                }
                                                 windoorTransformerRef.current?.moveToTop();
                                                 layerRef.current?.batchDraw();
                                                 return null;
@@ -2003,6 +2058,18 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                             anchorSize={6}
                             enabledAnchors={windoorEnabledAnchors}
                             ignoreStroke={true}
+                             // Always keep room transformer above if a room is selected and no windoor is selected
+                             onTransformStart={() => {
+                                 // prevent stage mouseup from selecting a room after resizing a windoor
+                                 skipNextStageMouseUpRef.current = true;
+                                 if (Array.from(zoneDataRef.current.rooms.values()).some(r => r.selected) && !selectedWindoorId) {
+                                     transformerRef.current?.moveToTop();
+                                 }
+                             }}
+                             onTransform={() => {
+                                 // keep skipping stage mouseup while transforming
+                                 skipNextStageMouseUpRef.current = true;
+                             }}
                             boundBoxFunc={(oldBox, newBox) => {
                                 const id = selectedWindoorId || (windoorTransformerRef.current?.nodes()[0]?.id?.() as string | undefined);
                                 if (!id) return oldBox;
@@ -2041,6 +2108,8 @@ const Canvas = forwardRef<CanvasHandle, CanvasProps>(({ image, move, setInputMod
                                 return { ...newBox, x, y, width, height };
                             }}
                             onTransformEnd={() => {
+                                // ensure stage mouseup does not toggle room selection after resize
+                                skipNextStageMouseUpRef.current = true;
                                 const node = windoorTransformerRef.current?.nodes()[0] as Konva.Rect | undefined;
                                 if (!node) return;
                                 const id = node.id() as string;
